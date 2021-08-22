@@ -44,46 +44,6 @@ def load_mesh_file(filename):
     return array_nodes, array_elements, number_of_nodes, number_of_elements
 
 
-def modifyMasterStiffForDBC(K, DBCdof):
-    """ Modify the system stiffness matrix K to K_s according to Drichlet
-        Boundary Conditions.
-
-        Args:
-            K: the system stiffness matrix, [ndof x ndof]
-            ndof: the number of degree of freedoms
-            DBCdof: a list contains the dofs, such as [0, 1, 2]
-
-        Returns:
-            K_s: the modified system stiffness matrix, [ndof x ndof]
-    """
-    ndof = np.shape(K)[0]
-    nDBCdof = len(DBCdof)
-    K_s = np.copy(K)
-
-    for idof in range(nDBCdof):
-        for jentry in range(ndof):
-            K_s[DBCdof[idof], jentry] = 0
-            K_s[jentry, DBCdof[idof]] = 0
-            K_s[DBCdof[idof], DBCdof[idof]] = 1
-
-    return K_s
-
-
-def modifyTheResidual(r, DBCdof):
-    """ Modify the residual according to Drichlet Boundary Conditions.
-
-        Args:
-            r: the residual of the system, [ndof x 1]
-            DBCdof: a list contains the dofs, such as [0, 1, 2]
-
-        Returns:
-            r: the MODIFIED residual of the system, [ndof x 1]
-    """
-    for idof in range(len(DBCdof)):
-        r[DBCdof[idof]] = 0
-    return r
-
-
 def plotLoadDisplacementCurve(U, LAM):
     """ Plot the equilibrium path.
 
