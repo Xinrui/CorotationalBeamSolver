@@ -16,6 +16,7 @@ import source.Utilities as util
 class CorotationalBeamElement2D():
     """
     It is a class formulating two-dimensional corotational beam elements.
+
     """
 
     def __init__(self):
@@ -44,35 +45,45 @@ class CorotationalBeamElement2D():
         None.
 
         """
-        self._initial_coordinate_node_1 = None
-        self._initial_coordinate_node_2 = None
+        self.__initial_coordinate_node_1 = None
+        self.__initial_coordinate_node_2 = None
 
-        self._width = None
-        self._height = None
+        self.__width = None
+        self.__height = None
 
-        self._analysis = "elasto-plastic"
-        self._beamtype = "Bernoulli"
+        self.__analysis = None
+        self.__beamtype = "Bernoulli"
 
-        self._youngs_modulus = None
+        self.__youngs_modulus = None
 
-        self._element_freedom_table = None
+        self.__element_freedom_table = None
 
-        self._global_displacement = np.zeros((6, 1), dtype=float)
-        self._num_of_gauss_locations_ksi = 3
-        self._num_of_gauss_locations_eta = 3
+        self.__incremental_global_displacement = np.zeros((6, 1), dtype=float)
+        self.__num_of_gauss_locations_ksi = 3
+        self.__num_of_gauss_locations_eta = 3
 
-        self._yield_stress = None
-        self._plastic_modulus = None
-        self._stress = np.zeros(
-            (self._num_of_gauss_locations_ksi, self._num_of_gauss_locations_eta), dtype=float)
-        self._plastic_strain = np.zeros(
-            (self._num_of_gauss_locations_ksi, self._num_of_gauss_locations_eta), dtype=float)
-        self._internal_hardening_variable = np.zeros(
-            (self._num_of_gauss_locations_ksi, self._num_of_gauss_locations_eta), dtype=float)
+        # All plastic cases, including Perfect Plasticity / No Hardening
+        self.__yield_stress = None
+
+        # Linear Hardening
+        self.__plastic_modulus = None
+
+        # Quadratic Hardening
+        self.__quadratic_coefficient = None
+
+        # Exponential Hardening
+        self.__saturation_stress = None
+
+        # Ramberg-Osgood Hardening
+        self.__modified_modulus = None
+
+        # "exponent" appears in both Exponential Hardening and Ramberg-Osgood 
+        # Hardening with different physical meaning
+        self.__exponent = None
 
     @property
     def initial_coordinate_node_1(self):
-        return self._initial_coordinate_node_1
+        return self.__initial_coordinate_node_1
 
     @initial_coordinate_node_1.setter
     def initial_coordinate_node_1(self, val):
@@ -85,14 +96,14 @@ class CorotationalBeamElement2D():
         """
 
         if isinstance(val, np.ndarray):
-            self._initial_coordinate_node_1 = val
+            self.__initial_coordinate_node_1 = val
         else:
             raise TypeError(
                 "The initial coordinate of node 1 must be a 2x1 array!")
 
     @property
     def initial_coordinate_node_2(self):
-        return self._initial_coordinate_node_2
+        return self.__initial_coordinate_node_2
 
     @initial_coordinate_node_2.setter
     def initial_coordinate_node_2(self, val):
@@ -105,17 +116,17 @@ class CorotationalBeamElement2D():
         """
 
         if isinstance(val, np.ndarray):
-            self._initial_coordinate_node_2 = val
+            self.__initial_coordinate_node_2 = val
         else:
             raise TypeError(
                 "The initial coordinate of node 2 must be a 2x1 array!")
 
     @property
-    def global_displacement(self):
-        return self._global_displacement
+    def incremental_global_displacement(self):
+        return self.__incremental_global_displacement
 
-    @global_displacement.setter
-    def global_displacement(self, val):
+    @incremental_global_displacement.setter
+    def incremental_global_displacement(self, val):
         """
         Set the global displacement of element.
 
@@ -124,10 +135,10 @@ class CorotationalBeamElement2D():
 
         """
         if isinstance(val, np.ndarray):
-            self._global_displacement = val
+            self.__incremental_global_displacement = val
         else:
             raise TypeError(
-                "Global displacement must be a 6x1 array!")
+                "incremental global displacement must be a 6x1 array!")
 
     @property
     def current_coordinate_node_1(self):
@@ -137,7 +148,7 @@ class CorotationalBeamElement2D():
         x1 = X1 + u1
 
         """
-        return self._initial_coordinate_node_1 + self.global_displacement[0: 2]
+        return self.__initial_coordinate_node_1 + self.__incremental_global_displacement[0: 2]
 
     @property
     def current_coordinate_node_2(self):
@@ -147,27 +158,27 @@ class CorotationalBeamElement2D():
         x2 = X2 + u2
 
         """
-        return self._initial_coordinate_node_2 + self.global_displacement[3: 5]
+        return self.__initial_coordinate_node_2 + self.__incremental_global_displacement[3: 5]
 
     @property
-    def local_rotation_node_1(self):
+    def global_rotation_node_1(self):
         """
         Get the global nodal rotation θ1.
 
         """
-        return self._global_displacement[2]
+        return self.__incremental_global_displacement[2]
 
     @property
-    def local_rotation_node_2(self):
+    def global_rotation_node_2(self):
         """
         Get the global nodal rotation θ2.
 
         """
-        return self._global_displacement[5]
+        return self.__incremental_global_displacement[5]
 
     @property
     def youngs_modulus(self):
-        return self._youngs_modulus
+        return self.__youngs_modulus
 
     @youngs_modulus.setter
     def youngs_modulus(self, val):
@@ -184,15 +195,11 @@ class CorotationalBeamElement2D():
         elif val <= 0:
             raise ValueError("Young's modulus must be positive!")
         else:
-            self._youngs_modulus = val
-            if self._analysis == "elasto-plastic":
-                self._tangent_modulus = val * \
-                    np.ones((self._num_of_gauss_locations_ksi,
-                            self._num_of_gauss_locations_eta), dtype=float)
+            self.__youngs_modulus = val
 
     @property
     def width(self):
-        return self._width
+        return self.__width
 
     @width.setter
     def width(self, val):
@@ -209,11 +216,11 @@ class CorotationalBeamElement2D():
         elif val <= 0:
             raise ValueError("The width of beam must be positive!")
         else:
-            self._width = val
+            self.__width = val
 
     @property
     def height(self):
-        return self._height
+        return self.__height
 
     @height.setter
     def height(self, val):
@@ -230,7 +237,72 @@ class CorotationalBeamElement2D():
         elif val <= 0:
             raise ValueError("The height of beam must be positive!")
         else:
-            self._height = val
+            self.__height = val
+
+    @property
+    def analysis(self):
+        return self.__analysis
+
+    @analysis.setter
+    def analysis(self, val):
+        if val == "elastic":
+            self.__analysis = val
+        elif val == "perfect plasticity":
+            self.__analysis = val
+            self.__stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__plastic_strain = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__tangent_modulus = self.__youngs_modulus * \
+                np.ones((self.__num_of_gauss_locations_ksi,
+                        self.__num_of_gauss_locations_eta), dtype=float)
+        elif val == "linear hardening":
+            self.__analysis = val
+            self.__stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__plastic_strain = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__tangent_modulus = self.__youngs_modulus * \
+                np.ones((self.__num_of_gauss_locations_ksi,
+                        self.__num_of_gauss_locations_eta), dtype=float)
+            self.__internal_hardening_variable = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+        elif val == "quadratic hardening":
+            self.__analysis = val
+            self.__stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__plastic_strain = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__tangent_modulus = self.__youngs_modulus * \
+                np.ones((self.__num_of_gauss_locations_ksi,
+                        self.__num_of_gauss_locations_eta), dtype=float)
+            self.__internal_hardening_variable = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+        elif val == "exponential hardening":
+            self.__analysis = val
+            self.__stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__plastic_strain = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__tangent_modulus = self.__youngs_modulus * \
+                np.ones((self.__num_of_gauss_locations_ksi,
+                        self.__num_of_gauss_locations_eta), dtype=float)
+            self.__internal_hardening_variable = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+        elif val == "ramberg-osgood hardening":
+            self.__analysis = val
+            self.__stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__plastic_strain = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__tangent_modulus = self.__youngs_modulus * \
+                np.ones((self.__num_of_gauss_locations_ksi,
+                        self.__num_of_gauss_locations_eta), dtype=float)
+            self.__internal_hardening_variable = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+        else:
+            print("These five models are implemented here: 1. elastic; 2. linear hardening; 3. quadratic hardening; 4. exponential hardening; 5. ramberg-osgood hardening.")
+            raise ValueError("Wrong constitutive law!")
 
     @property
     def area(self):
@@ -240,7 +312,7 @@ class CorotationalBeamElement2D():
         A = b * h
 
         """
-        return self._width * self._height
+        return self.__width * self.__height
 
     @property
     def moment_of_inertia(self):
@@ -250,11 +322,11 @@ class CorotationalBeamElement2D():
         I = 1/12 * b * h^3
 
         """
-        return 1/12 * self._width * (self._height) ** 3
+        return 1/12 * self.__width * (self.__height) ** 3
 
     @property
     def yield_stress(self):
-        return self._yield_stress
+        return self.__yield_stress
 
     @yield_stress.setter
     def yield_stress(self, val):
@@ -271,11 +343,11 @@ class CorotationalBeamElement2D():
         elif val <= 0:
             raise ValueError("Moment of inertia must be positive!")
         else:
-            self._yield_stress = val
+            self.__yield_stress = val
 
     @property
     def plastic_modulus(self):
-        return self._plastic_modulus
+        return self.__plastic_modulus
 
     @plastic_modulus.setter
     def plastic_modulus(self, val):
@@ -292,11 +364,95 @@ class CorotationalBeamElement2D():
         elif val <= 0:
             raise ValueError("Plastic modulus must be positive!")
         else:
-            self._plastic_modulus = val
+            self.__plastic_modulus = val
+
+    @property
+    def quadratic_coefficient(self):
+        return self.__quadratic_coefficient
+
+    @quadratic_coefficient.setter
+    def quadratic_coefficient(self, val):
+        """
+        Set the quadratic coefficient of the beam element.
+
+        Raises:
+            TypeError: If value is not a float number.
+            ValueError: If value is not positive.
+
+        """
+        if not isinstance(val, float):
+            raise TypeError("Quadratic coefficient must be a float number!")
+        elif val <= 0:
+            raise ValueError("Quadratic coefficient must be positive!")
+        else:
+            self.__quadratic_coefficient = val
+    
+    @property
+    def saturation_stress(self):
+        return self.__saturation_stress
+
+    @saturation_stress.setter
+    def saturation_stress(self, val):
+        """
+        Set the saturation stress of the beam element.
+
+        Raises:
+            TypeError: If value is not a float number.
+            ValueError: If value is not positive.
+
+        """
+        if not isinstance(val, float):
+            raise TypeError("Saturation stress must be a float number!")
+        elif val <= 0:
+            raise ValueError("Saturation stress must be positive!")
+        else:
+            self.__saturation_stress = val
+            
+    @property
+    def modified_modulus(self):
+        return self.__modified_modulus
+
+    @modified_modulus.setter
+    def modified_modulus(self, val):
+        """
+        Set the modified modulus of the beam element.
+
+        Raises:
+            TypeError: If value is not a float number.
+            ValueError: If value is not positive.
+
+        """
+        if not isinstance(val, float):
+            raise TypeError("Modified modulus must be a float number!")
+        elif val <= 0:
+            raise ValueError("Modified modulus must be positive!")
+        else:
+            self.__modified_modulus = val
+            
+    @property
+    def exponent(self):
+        return self.__exponent
+
+    @exponent.setter
+    def exponent(self, val):
+        """
+        Set the exponent of the beam element.
+
+        Raises:
+            TypeError: If value is not a float number.
+            ValueError: If value is not positive.
+
+        """
+        if not isinstance(val, float):
+            raise TypeError("Exponent must be a float number!")
+        elif val <= 0:
+            raise ValueError("Exponent must be positive!")
+        else:
+            self.__exponent = val
 
     @property
     def element_freedom_table(self):
-        return self._element_freedom_table
+        return self.__element_freedom_table
 
     @element_freedom_table.setter
     def element_freedom_table(self, val):
@@ -313,7 +469,7 @@ class CorotationalBeamElement2D():
         elif val < 0:
             raise ValueError("Number of the member must be non-negative!")
         else:
-            self._element_freedom_table = np.linspace(
+            self.__element_freedom_table = np.linspace(
                 3 * val, 3 * val + 5, num=6, dtype=int)
 
     @property
@@ -339,32 +495,32 @@ class CorotationalBeamElement2D():
                      self.current_coordinate_node_1[1],
                      self.current_coordinate_node_2[0] -
                      self.current_coordinate_node_1[0])
-    
+
     @property
-    def local_dof(self):
+    def local_displacement(self):
 
         u_bar = self.current_length - self.initial_length
 
-        theta1_bar = atan2((cos(self.current_angle) * sin(self.local_rotation_node_1 + self.initial_angle)
-                            - sin(self.current_angle) * cos(self.local_rotation_node_1 + self.initial_angle)),
-                           (cos(self.current_angle) * cos(self.local_rotation_node_1 + self.initial_angle)
-                            + sin(self.current_angle) * sin(self.local_rotation_node_1 + self.initial_angle)))
+        theta1_bar = atan2((cos(self.current_angle) * sin(self.global_rotation_node_1 + self.initial_angle)
+                            - sin(self.current_angle) * cos(self.global_rotation_node_1 + self.initial_angle)),
+                           (cos(self.current_angle) * cos(self.global_rotation_node_1 + self.initial_angle)
+                            + sin(self.current_angle) * sin(self.global_rotation_node_1 + self.initial_angle)))
 
-        theta2_bar = atan2((cos(self.current_angle) * sin(self.local_rotation_node_2 + self.initial_angle)
-                            - sin(self.current_angle) * cos(self.local_rotation_node_2 + self.initial_angle)),
-                           (cos(self.current_angle) * cos(self.local_rotation_node_2 + self.initial_angle)
-                            + sin(self.current_angle) * sin(self.local_rotation_node_2 + self.initial_angle)))
+        theta2_bar = atan2((cos(self.current_angle) * sin(self.global_rotation_node_2 + self.initial_angle)
+                            - sin(self.current_angle) * cos(self.global_rotation_node_2 + self.initial_angle)),
+                           (cos(self.current_angle) * cos(self.global_rotation_node_2 + self.initial_angle)
+                            + sin(self.current_angle) * sin(self.global_rotation_node_2 + self.initial_angle)))
 
         return np.array([[u_bar, theta1_bar, theta2_bar]]).T
-    
+
     @property
     def local_material_stiffness(self):
-        if self._analysis == "elastic":
-            return self._youngs_modulus / self.current_length * \
+        if self.__analysis == "elastic":
+            return self.__youngs_modulus / self.current_length * \
                 np.array([[self.area, 0., 0.],
                           [0., 4 * self.moment_of_inertia,
                               2 * self.moment_of_inertia],
-                          [0., 2 * self.moment_of_inertia, 
+                          [0., 2 * self.moment_of_inertia,
                            4 * self.moment_of_inertia]])
         else:
             kl_11 = 0.0
@@ -374,118 +530,283 @@ class CorotationalBeamElement2D():
             kl_13 = 0.0
             kl_23 = 0.0
             [gauss_locations_ksi, weights_ksi] = np.polynomial.legendre.leggauss(
-                self._num_of_gauss_locations_ksi)
+                self.__num_of_gauss_locations_ksi)
             [gauss_locations_eta, weights_eta] = np.polynomial.legendre.leggauss(
-                self._num_of_gauss_locations_eta)
+                self.__num_of_gauss_locations_eta)
 
-            for iksi in range(self._num_of_gauss_locations_ksi):
-                for jeta in range(self._num_of_gauss_locations_eta):
+            for iksi in range(self.__num_of_gauss_locations_ksi):
+                for jeta in range(self.__num_of_gauss_locations_eta):
                     x, z = self.map_local_coordinate_to_global_coordinate(
                         gauss_locations_ksi[iksi], gauss_locations_eta[jeta])
-                    fac = self._width * self._height * self.initial_length / 4
+                    fac = self.__width * self.__height * self.initial_length / 4
                     weight = weights_ksi[iksi] * weights_eta[jeta]
 
                     kl_11 += fac * \
-                        self._tangent_modulus[iksi, jeta] / \
+                        self.__tangent_modulus[iksi, jeta] / \
                         (self.initial_length) ** 2 * weight
-                    kl_22 += fac * self._tangent_modulus[iksi, jeta] * (z * (4 / self.initial_length - 6 *
-                                                                             x / (self.initial_length) ** 2)) ** 2 * weight
-                    kl_33 += fac * self._tangent_modulus[iksi, jeta] * (z * (2 / self.initial_length - 6 *
-                                                                             x / (self.initial_length) ** 2)) ** 2 * weight
-                    kl_12 += fac * self._tangent_modulus[iksi, jeta] * z * (
+                    kl_22 += fac * self.__tangent_modulus[iksi, jeta] * (z * (4 / self.initial_length - 6 *
+                                                                              x / (self.initial_length) ** 2)) ** 2 * weight
+                    kl_33 += fac * self.__tangent_modulus[iksi, jeta] * (z * (2 / self.initial_length - 6 *
+                                                                              x / (self.initial_length) ** 2)) ** 2 * weight
+                    kl_12 += fac * self.__tangent_modulus[iksi, jeta] * z * (
                         4 / (self.initial_length) ** 2 - 6 * x / (self.initial_length) ** 3) * weight
-                    kl_13 += fac * self._tangent_modulus[iksi, jeta] * z * (
+                    kl_13 += fac * self.__tangent_modulus[iksi, jeta] * z * (
                         2 / (self.initial_length) ** 2 - 6 * x / (self.initial_length) ** 3) * weight
-                    kl_23 += fac * self._tangent_modulus[iksi, jeta] * z ** 2 * (4 / self.initial_length - 6 * x / (
+                    kl_23 += fac * self.__tangent_modulus[iksi, jeta] * z ** 2 * (4 / self.initial_length - 6 * x / (
                         self.initial_length) ** 2) * (2 / self.initial_length - 6 * x / (self.initial_length) ** 2) * weight
 
             return np.c_[np.r_[kl_11, kl_12, kl_13], np.r_[kl_12, kl_22, kl_23], np.r_[kl_13, kl_23, kl_33]]
 
     @property
     def local_force(self):
-        if self._analysis == "elastic":
-            return self.local_material_stiffness @ self.local_dof
+        if self.__analysis == "elastic":
+            return self.local_material_stiffness @ self.local_displacement
         else:
             # local_force = np.zeros((3, 1), dtype=float)
             [gauss_locations_ksi, weights_ksi] = np.polynomial.legendre.leggauss(
-                self._num_of_gauss_locations_ksi)
+                self.__num_of_gauss_locations_ksi)
             [gauss_locations_eta, weights_eta] = np.polynomial.legendre.leggauss(
-                self._num_of_gauss_locations_eta)
+                self.__num_of_gauss_locations_eta)
 
             N = 0.0
             M1 = 0.0
             M2 = 0.0
 
-            for i in range(self._num_of_gauss_locations_ksi):
-                for j in range(self._num_of_gauss_locations_eta):
+            for i in range(self.__num_of_gauss_locations_ksi):
+                for j in range(self.__num_of_gauss_locations_eta):
                     x, z = self.map_local_coordinate_to_global_coordinate(
                         gauss_locations_ksi[i], gauss_locations_eta[j])
 
-                    fac = self._width * self._height * self.initial_length / 4
+                    fac = self.__width * self.__height * self.initial_length / 4
                     weight = weights_ksi[i] * weights_eta[j]
 
                     N += fac * \
-                        self._stress[i, j] / self.initial_length * weight
+                        self.__stress[i, j] / self.initial_length * weight
 
-                    M1 += fac * self._stress[i, j] * z * (
+                    M1 += fac * self.__stress[i, j] * z * (
                         4 / self.initial_length - 6 * x / (self.initial_length) ** 2) * weight
 
-                    M2 += fac * self._stress[i, j] * z * (
+                    M2 += fac * self.__stress[i, j] * z * (
                         2 / self.initial_length - 6 * x / (self.initial_length) ** 2) * weight
 
             return np.r_[N, M1, M2]
-    
+
     def map_local_coordinate_to_global_coordinate(self, ksi, eta):
         x = self.initial_length / 2 * (ksi + 1)
-        z = self._height / 2 * eta
+        z = self.__height / 2 * eta
 
         return x, z
 
     def axial_strain(self, x, z):
-        return self.local_dof[0] / self.initial_length + z * ((4 / self.initial_length - 6 *
-                                                               x / (self.initial_length) ** 2) * self.local_dof[1] +
-                                                              (2 / self.initial_length - 6 *
-                                                               x / (self.initial_length) ** 2) * self.local_dof[2])
+        return self.local_displacement[0] / self.initial_length + z * ((4 / self.initial_length - 6 *
+                                                                        x / (self.initial_length) ** 2) * self.local_displacement[1] +
+                                                                       (2 / self.initial_length - 6 *
+                                                                        x / (self.initial_length) ** 2) * self.local_displacement[2])
 
-    def perform_linear_hardening(self):
+    def perform_perfect_plasticity(self):
+        gauss_locations_ksi = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_ksi)[0]
+        gauss_locations_eta = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_eta)[1]
 
-        [gauss_locations_ksi, weights_ksi] = np.polynomial.legendre.leggauss(
-            self._num_of_gauss_locations_ksi)
-        [gauss_locations_eta, weights_eta] = np.polynomial.legendre.leggauss(
-            self._num_of_gauss_locations_eta)
+        def yield_stress_function(alpha):
+            return self.__yield_stress
 
-        for iksi in range(self._num_of_gauss_locations_ksi):
-            for jeta in range(self._num_of_gauss_locations_eta):
+        for iksi in range(self.__num_of_gauss_locations_ksi):
+            for jeta in range(self.__num_of_gauss_locations_eta):
                 x, z = self.map_local_coordinate_to_global_coordinate(
                     gauss_locations_ksi[iksi], gauss_locations_eta[jeta])
-                sigma_trial = self._youngs_modulus * \
+                stress_trial = self.__youngs_modulus * \
                     (float(self.axial_strain(x, z)) -
-                     self._plastic_strain[iksi, jeta])
-                # eps_plastic_trial = eps_plastic
-                # alpha_trial = alpha
-                f_trial = np.abs(sigma_trial) - \
-                    (self._yield_stress + self._plastic_modulus *
-                     self._internal_hardening_variable[iksi, jeta])
+                     self.__plastic_strain[iksi, jeta])
+                yield_condition_trial = np.abs(
+                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
 
-                if f_trial <= 0:
-                    self._stress[iksi, jeta] = sigma_trial
-                    # eps_plastic = eps_plastic_trial
-                    # alpha = alpha_trial
-                    self._tangent_modulus[iksi, jeta] = self._youngs_modulus
+                if yield_condition_trial <= 0:
+                    self.__stress[iksi, jeta] = stress_trial
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
                 else:
-                    deltagamma = f_trial / \
-                        (self._youngs_modulus + self._plastic_modulus)
-                    # self.sigma = (1 - deltagamma * self._youngs_modulus / np.abs(sigma_trial)) * sigma_trial
-                    self._stress[iksi, jeta] = (
-                        1 - deltagamma * self._youngs_modulus / np.abs(sigma_trial)) * sigma_trial
-                    self._plastic_strain[iksi,
-                                         jeta] += deltagamma * np.sign(sigma_trial)
-                    self._internal_hardening_variable[iksi, jeta] += deltagamma
-                    self._tangent_modulus[iksi, jeta] = self._youngs_modulus * \
-                        self._plastic_modulus / \
-                        (self._youngs_modulus + self._plastic_modulus)
+                    deltagamma = yield_condition_trial / self.__youngs_modulus
+                    self.__stress[iksi, jeta] = (
+                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                    self.__plastic_strain[iksi,
+                                          jeta] += deltagamma * np.sign(stress_trial)
+                    self.__tangent_modulus[iksi, jeta] = 0.0
 
-    
+    def perform_linear_hardening(self):
+        gauss_locations_ksi = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_ksi)[0]
+        gauss_locations_eta = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_eta)[0]
+
+        def yield_stress_function(alpha):
+            return self.__yield_stress + self.__plastic_modulus * alpha
+
+        for iksi in range(self.__num_of_gauss_locations_ksi):
+            for jeta in range(self.__num_of_gauss_locations_eta):
+                x, z = self.map_local_coordinate_to_global_coordinate(
+                    gauss_locations_ksi[iksi], gauss_locations_eta[jeta])
+                stress_trial = self.__youngs_modulus * \
+                    (float(self.axial_strain(x, z)) -
+                     self.__plastic_strain[iksi, jeta])
+                yield_condition_trial = np.abs(
+                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+
+                if yield_condition_trial <= 0:
+                    self.__stress[iksi, jeta] = stress_trial
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
+                else:
+                    deltagamma = yield_condition_trial / \
+                        (self.__youngs_modulus + self.__plastic_modulus)
+                    self.__stress[iksi, jeta] = (
+                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                    self.__plastic_strain[iksi,
+                                          jeta] += deltagamma * np.sign(stress_trial)
+                    self.__internal_hardening_variable[iksi,
+                                                       jeta] += deltagamma
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * \
+                        self.__plastic_modulus / \
+                        (self.__youngs_modulus + self.__plastic_modulus)
+
+    def perform_quadratic_hardening(self):
+        gauss_locations_ksi = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_ksi)[0]
+        gauss_locations_eta = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_eta)[0]
+
+        def yield_stress_function(alpha):
+            return self.__yield_stress + self.__youngs_modulus * (alpha - self.__quadratic_coefficient * alpha ** 2)
+
+        for iksi in range(self.__num_of_gauss_locations_ksi):
+            for jeta in range(self.__num_of_gauss_locations_eta):
+                x, z = self.map_local_coordinate_to_global_coordinate(
+                    gauss_locations_ksi[iksi], gauss_locations_eta[jeta])
+                stress_trial = self.__youngs_modulus * \
+                    (float(self.axial_strain(x, z)) -
+                     self.__plastic_strain[iksi, jeta])
+                yield_condition_trial = np.abs(
+                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+
+                if yield_condition_trial <= 0:
+                    self.__stress[iksi, jeta] = stress_trial
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
+                else:
+                    a = self.__quadratic_coefficient * self.__youngs_modulus
+                    b = 2 * self.__youngs_modulus * \
+                        (self.__internal_hardening_variable[iksi,
+                         jeta] * self.__quadratic_coefficient - 1)
+                    c = yield_condition_trial
+                    deltagamma = np.roots([a, b, c])[-1]
+                    self.__stress[iksi, jeta] = (
+                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                    self.__plastic_strain[iksi,
+                                          jeta] += deltagamma * np.sign(stress_trial)
+                    self.__internal_hardening_variable[iksi,
+                                                       jeta] += deltagamma
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * (2 * self.__quadratic_coefficient * self.__internal_hardening_variable[iksi, jeta] - 1) / (
+                        2 * self.__quadratic_coefficient * self.__internal_hardening_variable[iksi, jeta] - 2)
+
+    def perform_exponential_hardening(self):
+        gauss_locations_ksi = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_ksi)[0]
+        gauss_locations_eta = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_eta)[0]
+
+        def yield_stress_function(alpha):
+            return self.__yield_stress + (self.__saturation_stress - self.__yield_stress) * (1 - np.exp(-self.__exponent * alpha))
+
+        hardening_limit_stress = self.__saturation_stress - self.__yield_stress
+
+        for iksi in range(self.__num_of_gauss_locations_ksi):
+            for jeta in range(self.__num_of_gauss_locations_eta):
+                x, z = self.map_local_coordinate_to_global_coordinate(
+                    gauss_locations_ksi[iksi], gauss_locations_eta[jeta])
+                stress_trial = self.__youngs_modulus * \
+                    (float(self.axial_strain(x, z)) -
+                     self.__plastic_strain[iksi, jeta])
+                yield_condition_trial = np.abs(
+                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+
+                if yield_condition_trial <= 0:
+                    self.__stress[iksi, jeta] = stress_trial
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
+                else:
+                    deltagamma = 0
+                    residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                        self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+
+                    maxiter = 10
+                    iteration_counter = 0
+                    tolerance = 1.0e-5
+
+                    while residual > tolerance and iteration_counter < maxiter:
+                        dR_ddeltagamma = -self.__youngs_modulus - hardening_limit_stress * self.__exponent * \
+                            np.exp(-self.__exponent *
+                                   (self.__internal_hardening_variable[iksi, jeta] + deltagamma))
+                        d_g = - residual / dR_ddeltagamma
+                        deltagamma += d_g
+                        residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                            self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+                        iteration_counter += 1
+
+                    self.__stress[iksi, jeta] = (
+                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                    self.__plastic_strain[iksi,
+                                          jeta] += deltagamma * np.sign(stress_trial)
+                    self.__internal_hardening_variable[iksi,
+                                                       jeta] += deltagamma
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * hardening_limit_stress * self.__exponent * np.exp(-self.__exponent * self.__internal_hardening_variable[iksi, jeta]) / (
+                        self.__youngs_modulus + hardening_limit_stress * self.__exponent * np.exp(-self.__exponent * self.__internal_hardening_variable[iksi, jeta]))
+
+    def perform_ramberg_osgood_hardening(self):
+        gauss_locations_ksi = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_ksi)[0]
+        gauss_locations_eta = np.polynomial.legendre.leggauss(
+            self.__num_of_gauss_locations_eta)[0]
+
+        def yield_stress_function(alpha):
+            return self.__yield_stress + self.__modified_modulus * np.power(alpha, self.__exponent)
+
+        for iksi in range(self.__num_of_gauss_locations_ksi):
+            for jeta in range(self.__num_of_gauss_locations_eta):
+                x, z = self.map_local_coordinate_to_global_coordinate(
+                    gauss_locations_ksi[iksi], gauss_locations_eta[jeta])
+                stress_trial = self.__youngs_modulus * \
+                    (float(self.axial_strain(x, z)) -
+                     self.__plastic_strain[iksi, jeta])
+                yield_condition_trial = np.abs(
+                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+
+                if yield_condition_trial <= 0:
+                    self.__stress[iksi, jeta] = stress_trial
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
+                else:
+                    deltagamma = 0
+                    residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                        self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+
+                    maxiter = 10
+                    iteration_counter = 0
+                    tolerance = 1.0e-5
+
+                    while residual > tolerance and iteration_counter < maxiter:
+                        dR_ddeltagamma = -self.__youngs_modulus - self.__exponent * self.__modified_modulus * \
+                            np.power(
+                                self.__internal_hardening_variable[iksi, jeta] + deltagamma, self.__exponent - 1)
+                        d_g = - residual / dR_ddeltagamma
+                        deltagamma += d_g
+                        residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                            self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+                        iteration_counter += 1
+
+                    self.__stress[iksi, jeta] = (
+                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                    self.__plastic_strain[iksi,
+                                          jeta] += deltagamma * np.sign(stress_trial)
+                    self.__internal_hardening_variable[iksi,
+                                                       jeta] += deltagamma
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * self.__exponent * self.__modified_modulus * np.power(self.__internal_hardening_variable[iksi, jeta], self.__exponent - 1) / (
+                        self.__youngs_modulus + self.__exponent * self.__modified_modulus * np.power(self.__internal_hardening_variable[iksi, jeta], self.__exponent - 1))
 
     @property
     def transformation_matrix(self):
@@ -555,15 +876,15 @@ class CorotationalBeamElement3D():
         Args:
             X1: The position vector of the 1st node in undeformed state
             X2: The position vector of the 2nd node in undeformed state
-            _youngs_modulus: Young's modulus
+            __youngs_modulus: Young's modulus
             A: Cross-Sectional areas
             _moment_of_inertia_y: 2nd moments of inertia
         """
-        self._initial_coordinate_node_1 = None
-        self._initial_coordinate_node_2 = None
-        self._global_displacement = np.zeros((12, 1), dtype=float)
+        self.__initial_coordinate_node_1 = None
+        self.__initial_coordinate_node_2 = None
+        self.__incremental_global_displacement = np.zeros((12, 1), dtype=float)
 
-        self._youngs_modulus = None
+        self.__youngs_modulus = None
         self._shear_modulus = None
         self._area = None
 
@@ -574,11 +895,11 @@ class CorotationalBeamElement3D():
         self._current_frame_node_1 = np.eye(3)
         self._current_frame_node_2 = np.eye(3)
 
-        self._element_freedom_table = None
+        self.__element_freedom_table = None
 
     @property
     def initial_coordinate_node_1(self):
-        return self._initial_coordinate_node_1
+        return self.__initial_coordinate_node_1
 
     @initial_coordinate_node_1.setter
     def initial_coordinate_node_1(self, val):
@@ -590,14 +911,14 @@ class CorotationalBeamElement3D():
         """
 
         if isinstance(val, np.ndarray):
-            self._initial_coordinate_node_1 = val
+            self.__initial_coordinate_node_1 = val
         else:
             raise TypeError(
                 "The initial coordinate of node 1 must be a 2x1 array!")
 
     @property
     def initial_coordinate_node_2(self):
-        return self._initial_coordinate_node_2
+        return self.__initial_coordinate_node_2
 
     @initial_coordinate_node_2.setter
     def initial_coordinate_node_2(self, val):
@@ -609,30 +930,30 @@ class CorotationalBeamElement3D():
         """
 
         if isinstance(val, np.ndarray):
-            self._initial_coordinate_node_2 = val
+            self.__initial_coordinate_node_2 = val
         else:
             raise TypeError(
                 "The initial coordinate of node 2 must be a 2x1 array!")
 
     @property
-    def global_displacement(self):
-        return self._global_displacement
+    def incremental_global_displacement(self):
+        return self.__incremental_global_displacement
 
-    @global_displacement.setter
-    def global_displacement(self, val):
+    @incremental_global_displacement.setter
+    def incremental_global_displacement(self, val):
         if isinstance(val, np.ndarray):
-            self._global_displacement = val
+            self.__incremental_global_displacement = val
         else:
             raise TypeError(
                 "Global displacement must be a 6x1 array!")
 
     @property
     def current_coordinate_node_1(self):
-        return self._initial_coordinate_node_1 + self._global_displacement[0: 3]
+        return self.__initial_coordinate_node_1 + self.__incremental_global_displacement[0: 3]
 
     @property
     def current_coordinate_node_2(self):
-        return self._initial_coordinate_node_2 + self._global_displacement[6: 9]
+        return self.__initial_coordinate_node_2 + self.__incremental_global_displacement[6: 9]
 
     @property
     def current_orientation_node_1(self):
@@ -674,7 +995,7 @@ class CorotationalBeamElement3D():
 
     @property
     def element_freedom_table(self):
-        return self._element_freedom_table
+        return self.__element_freedom_table
 
     @element_freedom_table.setter
     def element_freedom_table(self, val):
@@ -683,16 +1004,16 @@ class CorotationalBeamElement3D():
         elif val < 0:
             raise ValueError("Number of the member must be non-negative!")
         else:
-            self._element_freedom_table = np.linspace(
+            self.__element_freedom_table = np.linspace(
                 6 * val, 6 * val + 11, num=12, dtype=int)
 
     @property
     def youngs_modulus(self):
-        return self._youngs_modulus
+        return self.__youngs_modulus
 
     @youngs_modulus.setter
     def youngs_modulus(self, val):
-        """Set the Young's modulus of the beam element: _youngs_modulus > 0.
+        """Set the Young's modulus of the beam element: __youngs_modulus > 0.
 
         Raises:
             TypeError: If value is not a positive float number.
@@ -704,7 +1025,7 @@ class CorotationalBeamElement3D():
         elif val <= 0:
             raise ValueError("Young's modulus must be positive!")
         else:
-            self._youngs_modulus = val
+            self.__youngs_modulus = val
 
     @property
     def shear_modulus(self):
@@ -830,22 +1151,22 @@ class CorotationalBeamElement3D():
 
         k_l = np.zeros((7, 7), dtype=float)
 
-        k_l[0, 0] = self._youngs_modulus * self._area
+        k_l[0, 0] = self.__youngs_modulus * self._area
 
         k_l[1, 1], k_l[4, 4] = self._shear_modulus * \
             self._polar_moment_of_inertia, self._shear_modulus * self._polar_moment_of_inertia
         k_l[1, 4], k_l[4, 1] = -self._shear_modulus * self._polar_moment_of_inertia, - \
             self._shear_modulus * self._polar_moment_of_inertia
 
-        k_l[2, 2], k_l[5, 5] = 4.0 * self._youngs_modulus * \
-            self._moment_of_inertia_z, 4.0 * self._youngs_modulus * self._moment_of_inertia_z
-        k_l[2, 5], k_l[5, 2] = 2.0 * self._youngs_modulus * \
-            self._moment_of_inertia_z, 2.0 * self._youngs_modulus * self._moment_of_inertia_z
+        k_l[2, 2], k_l[5, 5] = 4.0 * self.__youngs_modulus * \
+            self._moment_of_inertia_z, 4.0 * self.__youngs_modulus * self._moment_of_inertia_z
+        k_l[2, 5], k_l[5, 2] = 2.0 * self.__youngs_modulus * \
+            self._moment_of_inertia_z, 2.0 * self.__youngs_modulus * self._moment_of_inertia_z
 
-        k_l[3, 3], k_l[6, 6] = 4.0 * self._youngs_modulus * \
-            self._moment_of_inertia_y, 4.0 * self._youngs_modulus * self._moment_of_inertia_y
-        k_l[3, 6], k_l[6, 3] = 2.0 * self._youngs_modulus * \
-            self._moment_of_inertia_y, 2.0 * self._youngs_modulus * self._moment_of_inertia_y
+        k_l[3, 3], k_l[6, 6] = 4.0 * self.__youngs_modulus * \
+            self._moment_of_inertia_y, 4.0 * self.__youngs_modulus * self._moment_of_inertia_y
+        k_l[3, 6], k_l[6, 3] = 2.0 * self.__youngs_modulus * \
+            self._moment_of_inertia_y, 2.0 * self.__youngs_modulus * self._moment_of_inertia_y
 
         k_l /= self.current_length
 
@@ -875,7 +1196,7 @@ class CorotationalBeamElement3D():
         return np.c_[r_1, r_2, r_3]
 
     @property
-    def local_dof(self):
+    def local_displacement(self):
         p_l = np.zeros((7, 1), dtype=float)
 
         theta_1_tilde = logm(self.current_local_frame.T @
@@ -893,11 +1214,11 @@ class CorotationalBeamElement3D():
     def local_force(self):
         # Assemble axial force and local end moments into a vector q_l.
 
-        return self.local_material_stiffness @ self.local_dof
+        return self.local_material_stiffness @ self.local_displacement
 
     @property
     def Ba_matrix(self):
-        p_l = self.local_dof
+        p_l = self.local_displacement
         T_s_inv_theta_1bar = util.getTransformation(p_l[1: 4], 'inv')
         T_s_inv_theta_2bar = util.getTransformation(p_l[4: 7], 'inv')
 
@@ -914,10 +1235,10 @@ class CorotationalBeamElement3D():
 
     def Khi_matrix(self, i):
         if i == 1:
-            theta_bar = self.local_dof[1: 4]
+            theta_bar = self.local_displacement[1: 4]
             v = self.local_force[1: 4]
         elif i == 2:
-            theta_bar = self.local_dof[4: 7]
+            theta_bar = self.local_displacement[4: 7]
             v = self.local_force[4: 7]
         else:
             raise ValueError("Wrong value of i!")
@@ -1084,17 +1405,21 @@ class CorotationalBeamElement3D():
 
 class System():
     def __init__(self):
-        self._dimension = None
+        self.__dimension = None
         self._geometry_name = None
+        self.__analysis = "elastic"
 
         self._structure = None
 
         self._number_of_elements = None
         self._number_of_nodes = None
         self._number_of_dofs = None
-        self._number_of_load_increments = None
+        
+        self._number_of_increments = None
+        
         self._max_load = None
         self._max_displacement = None
+        self._arc_length = None
 
         self._dirichlet_boundary_condition = []
         self._load_boundary_condition = []
@@ -1106,16 +1431,25 @@ class System():
 
     @property
     def dimension(self):
-        return self._dimension
+        return self.__dimension
 
     @dimension.setter
     def dimension(self, val):
+        """
+        Set the dimension of the problem. The problem could be
+        2-dimensional or 3-dimensional.
+
+        Raises:
+            TypeError: If value is not an integer.
+            ValueError: If value is not 2 or 3.
+
+        """
         if not isinstance(val, int):
             raise TypeError("The dimension must be 2 or 3!")
         elif val != 2 and val != 3:
             raise ValueError("The dimension must be 2 or 3!")
         else:
-            self._dimension = val
+            self.__dimension = val
 
     @property
     def geometry_name(self):
@@ -1129,17 +1463,34 @@ class System():
             raise TypeError("The name of mesh file must be a string!")
 
     @property
-    def number_of_load_increments(self):
-        return self._number_of_load_increments
+    def analysis(self):
+        return self.__analysis
 
-    @number_of_load_increments.setter
-    def number_of_load_increments(self, val):
+    @analysis.setter
+    def analysis(self, val):
+        if not ((val == "elastic") or
+                (val == "perfect plasticity") or
+                (val == "linear hardening") or
+                (val == "quadratic hardening") or
+                (val == "exponential hardening") or
+                (val == "ramberg-osgood hardening")):
+            print("These six models are implemented here: 1. elastic; 2. perfect plasticity; 3. linear hardening; 4. quadratic hardening; 5. exponential hardening; 6. ramberg-osgood hardening.")
+            raise ValueError("Wrong constitutive law!")
+        else:
+            self.__analysis = val
+
+    @property
+    def number_of_increments(self):
+        return self._number_of_increments
+
+    @number_of_increments.setter
+    def number_of_increments(self, val):
         if not isinstance(val, int):
             raise TypeError("Number of load increments must be a integer!")
         elif val <= 0:
             raise ValueError("Number of load increments must be positive!")
         else:
-            self._number_of_load_increments = val
+            self._number_of_increments = val
 
     @property
     def max_load(self):
@@ -1167,6 +1518,21 @@ class System():
                 "The upper bound of displacement must be positive!")
         else:
             self._max_displacement = val
+
+    @property
+    def arc_length(self):
+        return self._arc_length
+
+    @arc_length.setter
+    def arc_length(self, val):
+        if not isinstance(val, float):
+            raise TypeError("The arc length must be a float!")
+        elif val <= 0:
+            raise ValueError(
+                "The arc length must be positive!")
+        else:
+            self._arc_length = val
+
 
     @property
     def tolerance(self):
@@ -1200,16 +1566,16 @@ class System():
 
     @solver.setter
     def solver(self, val):
-        if val != "Load-Control" and val != "Arc-Length-Control":
+        if val != "load-control" and val != "displacement-control" and val != "arc-length-control":
             raise ValueError("Invalid solver!")
         else:
             self._solver = val
 
     def initialize_structure(self, *parameters):
-        self._structure = []
+        structure = []
         array_nodes, array_elements, self._number_of_nodes, self._number_of_elements = util.load_mesh_file(
             self.geometry_name)
-        if self._dimension == 2:
+        if self.__dimension == 2:
             self._number_of_dofs = 3 * self._number_of_nodes
             for iele, ele in enumerate(array_elements.T):
                 co_ele = CorotationalBeamElement2D()
@@ -1221,12 +1587,11 @@ class System():
                 co_ele.youngs_modulus = parameters[0]
                 co_ele.width = parameters[1]
                 co_ele.height = parameters[2]
-                co_ele.yield_stress = parameters[3]
-                co_ele.plastic_modulus = parameters[4]
 
+                co_ele.analysis = self.__analysis
                 co_ele.element_freedom_table = iele
 
-                self._structure.append(co_ele)
+                structure.append(co_ele)
         else:
             self._number_of_dofs = 6 * self._number_of_nodes
             for iele, ele in enumerate(array_elements.T):
@@ -1242,9 +1607,32 @@ class System():
                 co_ele.moment_of_inertia_z = parameters[3]
                 co_ele.polar_moment_of_inertia = parameters[4]
                 co_ele.shear_modulus = parameters[5]
+
+                co_ele.analysis = self.__analysis
                 co_ele.element_freedom_table = iele
 
-                self._structure.append(co_ele)
+                structure.append(co_ele)
+                
+        self._structure = structure
+
+    def initialize_with_plasticity(self, *parameters):
+        for ele in self._structure:
+            if self.__analysis == "perfect plasticity":
+                ele.yield_stress = parameters[0]
+            elif self.__analysis == "linear hardening":
+                ele.yield_stress = parameters[0]
+                ele.plastic_modulus = parameters[1]
+            elif self.__analysis == "quadratic hardening":
+                ele.yield_stress = parameters[0]
+                ele.quadratic_coefficient = parameters[1]
+            elif self.__analysis == "exponential hardening":
+                ele.yield_stress = parameters[0]
+                ele.saturation_stress = parameters[1]
+                ele.exponent = parameters[2]
+            elif self.__analysis == "ramberg-osgood hardening":
+                ele.yield_stress = parameters[0]
+                ele.modified_modulus = parameters[1]
+                ele.exponent = parameters[2]
 
     def add_dirichlet_bc(self, node, dof):
         if self.dimension == 2:
@@ -1275,7 +1663,7 @@ class System():
                 self._dirichlet_boundary_condition.append(6 * node + 4)
                 self._dirichlet_boundary_condition.append(6 * node + 5)
 
-    def add_load_bc(self, node, dof):
+    def add_load_bc(self, node, dof, direction):
         if self.dimension == 2:
             if dof == "x":
                 self._load_boundary_condition.append(3 * node)
@@ -1293,7 +1681,12 @@ class System():
 
         self._load_increment_vector = np.zeros(
             (self._number_of_dofs, 1), dtype=float)
-        self._load_increment_vector[self._load_boundary_condition] = -1
+        if direction == "+":
+            self._load_increment_vector[self._load_boundary_condition] = 1
+        elif direction == "-":
+            self._load_increment_vector[self._load_boundary_condition] = -1
+        else:
+            raise ValueError("Please assign the correct load direction!")
 
     def master_stiffness_matrix(self):
         """ Assemble system stiffness matrix K from member stiffness matrices.
@@ -1309,7 +1702,7 @@ class System():
         """
         K = np.zeros((self._number_of_dofs, self._number_of_dofs), dtype=float)
 
-        if self._dimension == 2:
+        if self.__dimension == 2:
             dof_per_ele = 6
         else:
             dof_per_ele = 12
@@ -1377,13 +1770,23 @@ class System():
                 beam: the list of beam elements, DATA UPDATED
                 q_l: the UPDATED storage vector of local forces, [3 * nele x 1]
         """
-        if self._dimension == 2:
+        if self.__dimension == 2:
             for iele, ele in enumerate(self._structure):
-                ele.global_displacement = u[3 * iele: 3 * iele + 6]
-                ele.perform_linear_hardening()
+                ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
+                if ele.analysis == "perfect plasticity":
+                    ele.perform_perfect_plasticity()
+                elif ele.analysis == "linear hardening":
+                    ele.perform_linear_hardening()
+                elif ele.analysis == "quadratic hardening":
+                    ele.perform_quadratic_hardening()
+                elif ele.analysis == "exponential hardening":
+                    ele.perform_exponential_hardening()
+                elif ele.analysis == "ramberg-osgood hardening":
+                    ele.perform_ramberg_osgood_hardening()
         else:
             for iele, ele in enumerate(self._structure):
-                ele.global_displacement = u[6 * iele: 6 * iele + 12]
+                ele.incremental_global_displacement = u[6 *
+                                                        iele: 6 * iele + 12]
                 ele.current_orientation_node_1 = expm(util.getSkewSymmetric(
                     deltau[6 * iele + 3: 6 * iele + 6])) @ ele.current_orientation_node_1
                 ele.current_orientation_node_2 = expm(util.getSkewSymmetric(
@@ -1402,15 +1805,16 @@ class System():
                 beam: the list of beam elements, DATA UPDATED
                 q_l: the UPDATED storage vector of local forces, [3 * nele x 1]
         """
-        if self._dimension == 2:
+        if self.__dimension == 2:
             for iele, ele in enumerate(self._structure):
-                ele.global_displacement = u[3 * iele: 3 * iele + 6]
-                ele._plastic_strain = plastic_strain[iele]
-                ele._internal_hardening_variable = internal_hardening_variable[iele]
-                ele.perform_linear_hardening()
+                ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
+                # ele.__plastic_strain = plastic_strain[iele]
+                # ele.__internal_hardening_variable = internal_hardening_variable[iele]
+                # ele.perform_perfect_plasticity()
         else:
             for iele, ele in enumerate(self._structure):
-                ele.global_displacement = u[6 * iele: 6 * iele + 12]
+                ele.incremental_global_displacement = u[6 *
+                                                        iele: 6 * iele + 12]
                 ele.current_orientation_node_1 = expm(util.getSkewSymmetric(
                     deltau[6 * iele + 3: 6 * iele + 6])) @ ele.current_orientation_node_1
                 ele.current_orientation_node_2 = expm(util.getSkewSymmetric(
@@ -1430,7 +1834,116 @@ class System():
             r[idof] = 0
         return r
 
+    def load_control(self):
+        return
+    
+    def displacement_control(self):
+        return
+    
+    def arc_length_control(self):
+        U = np.array([0.], dtype=float)
+        LAM = np.array([0.], dtype=float)
+        u = np.zeros((self._number_of_dofs, 1), dtype=float)
+        lam = 0.
+        Deltau_prev = np.ones((self._number_of_dofs, 1), dtype=float)
+        for n in range(self.number_of_load_increments):
+
+            # set the predictor by equal load increments
+            K = self.master_stiffness_matrix()
+            K_s = self.modified_master_stiffness_matrix(K)
+
+            deltaubar = np.linalg.solve(K_s, self._load_increment_vector)
+            Deltalam = np.sign(float(Deltau_prev.T @ deltaubar)) * self._arc_length / np.sqrt(float(deltaubar.T @ deltaubar))
+            lam += Deltalam
+            Delta_increment = Deltalam * self._load_increment_vector
+            Deltau = np.linalg.solve(K_s, Delta_increment)
+ 
+            u += Deltau
+
+            # update member data
+            self.update_member_data(u, Deltau)
+
+            # calculate internal force vector
+            F_int = self.internal_force_vector()
+
+            # calculate the residual of the system
+            r = F_int - lam * self._load_increment_vector
+            r = self.modified_residual(r)
+            r_norm = np.linalg.norm(r)
+
+            # initialize iteration counter
+            kiter = 0
+            deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
+            deltalam = 0.
+
+            # iterate, until good result or so many iteration steps
+            while(r_norm > self.tolerance and kiter < self.max_iteration_steps):
+
+                # load-Control
+                K = self.master_stiffness_matrix()
+                K_s = self.modified_master_stiffness_matrix(K)
+                
+                deltau_star = np.linalg.solve(K_s, -r)
+                deltau_bar = np.linalg.solve(K_s, self._load_increment_vector)
+                Deltau += deltau
+                
+                a = float(deltau_bar.T @ deltau_bar)
+                b = float(2 * (Deltau + deltau_star).T @ deltau_bar)
+                c = float((Deltau + deltau_star).T @ (Deltau + deltau_star)) - self._arc_length ** 2
+                
+                [deltalam2_hat, deltalam1_hat] = np.roots([a, b, c])
+
+                dotprod1 = float((Deltau + deltau_star + deltalam1_hat * deltau_bar).T @ Deltau)
+                dotprod2 = float((Deltau + deltau_star + deltalam2_hat * deltau_bar).T @ Deltau)
+                
+                if dotprod1 >= dotprod2:
+                    deltalam += deltalam1_hat
+                    deltau += (deltau_star + deltalam1_hat * deltau_bar)
+                else:
+                    deltalam += deltalam2_hat
+                    deltau += (deltau_star + deltalam2_hat * deltau_bar)
+                    
+                # update member data
+                self.update_member_data(u + deltau, deltau)
+
+                # calculate internal force vector
+                F_int = self.internal_force_vector()
+
+                # calculate the residual of the system
+                r = F_int - (lam + deltalam) * self._load_increment_vector
+                r = self.modified_residual(r)
+                r_norm = np.linalg.norm(r)
+
+                # update iterations counter
+                kiter += 1
+                if(kiter == self.max_iteration_steps):
+                    raise RuntimeError(
+                        'Newton-Raphson iterations did not converge!')
+
+            """
+            ------------------------------------------------------------------
+            3. Update variables to their final value for the current increment
+            ------------------------------------------------------------------
+            """
+            u += deltau
+            Deltau_prev = Deltau + deltau
+            lam += deltalam
+
+            U = np.append(U, -u[self._load_boundary_condition])
+            LAM = np.append(LAM, lam)
+
+        return U, LAM
+    
     def solve_the_system(self):
+        if self._solver == "load-control":
+            U, LAM = self.load_control()
+        elif self._solver == "displacement-control":
+            U, LAM = self.displacement_control()
+        elif self._solver == "arc-length-control":
+            U, LAM = self.arc_length_control()
+        return U, LAM
+    
+    def solve_the_system_(self):
         lam = 0.
         u = np.zeros((self._number_of_dofs, 1), dtype=float)
         U = np.array([0.], dtype=float)
@@ -1467,9 +1980,9 @@ class System():
             plastic_strain = []
             internal_hardening_variable = []
             for ele in self._structure:
-                plastic_strain.append(ele._plastic_strain)
+                plastic_strain.append(ele.__plastic_strain)
                 internal_hardening_variable.append(
-                    ele._internal_hardening_variable)
+                    ele.__internal_hardening_variable)
 
             # iterate, until good result or so many iteration steps
             while(r_norm > self.tolerance and kiter < self.max_iteration_steps):
@@ -1510,7 +2023,7 @@ class System():
             LAM = np.append(LAM, lam)
 
         return U, LAM
-    
+
     def solve_the_system_dis(self):
         lam = 0.
         u = np.zeros((self._number_of_dofs, 1), dtype=float)
@@ -1523,7 +2036,7 @@ class System():
             K = self.master_stiffness_matrix()
             K_s = self.modified_master_stiffness_matrix(K)
             q = self._load_increment_vector
-            
+
             v = np.linalg.solve(K_s, q)
 
             f = float(np.sqrt(1 + v.T @ v))
@@ -1540,9 +2053,9 @@ class System():
 
             # calculate internal force vector
             F_int = self.internal_force_vector()
-            
+
             c = np.array([[0]])
-            
+
             # calculate the residual of the system
             r = F_int - lam_pre * self._load_increment_vector
             r = self.modified_residual(r)
@@ -1551,16 +2064,16 @@ class System():
             # copy them for iteration, "temp" means they are not on equilibrium path.
             u_temp = u_pre
             lam_temp = lam_pre
-            
+
             # initialize iteration counter
             kiter = 0
 
             plastic_strain = []
             internal_hardening_variable = []
-            for ele in self._structure:
-                plastic_strain.append(ele._plastic_strain)
-                internal_hardening_variable.append(
-                    ele._internal_hardening_variable)
+            # for ele in self._structure:
+            #     plastic_strain.append(ele.__plastic_strain)
+            # internal_hardening_variable.append(
+            #     ele.__internal_hardening_variable)
 
             # iterate, until good result or so many iteration steps
             while(r_norm > self.tolerance and kiter < self.max_iteration_steps):
@@ -1568,7 +2081,7 @@ class System():
                 # load-Control
                 K = self.master_stiffness_matrix()
                 K_s = self.modified_master_stiffness_matrix(K)
-                
+
                 v = np.linalg.solve(K_s, q)
                 f = float(np.sqrt(1 + v.T @ v))
 
@@ -1611,7 +2124,7 @@ class System():
             LAM = np.append(LAM, lam)
 
         return U, LAM
-    
+
     def plot_the_structure(self):
         """ Plot the UNDEFORMED and the DEFORMED structure.
             Args:
@@ -1622,7 +2135,7 @@ class System():
         """
         # generate coordinates of deformed structure
 
-        if self._dimension == 2:
+        if self.__dimension == 2:
             X = np.zeros((self._number_of_nodes))
             Y = np.zeros((self._number_of_nodes))
             x = np.zeros((self._number_of_nodes))
@@ -1640,7 +2153,7 @@ class System():
             # Plot both configurations
             plt.rc('text', usetex=True)
             plt.rc('font', family='serif')
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(dpi=150)
             ax.plot(X, Y, '.--', label='undeformed configuration')
             # ax.scatter(X, Y)
             ax.plot(x, y, '.-', label='deformed configuration')
@@ -1675,7 +2188,7 @@ class System():
                     z[iele + 1] = self._structure[iele].current_coordinate_node_2[2]
             plt.rc('text', usetex=True)
             plt.rc('font', family='serif')
-            fig = plt.figure()
+            fig = plt.figure(dpi=150)
             # ax = fig.add_subplot(111, projection='3d')
             ax = plt.axes(projection='3d')
             ax.plot(X, Y, Z, '.--', label='undeformed configuration')

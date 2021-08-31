@@ -55,7 +55,7 @@ def plotLoadDisplacementCurve(U, LAM):
     # Plot both configurations
     plt.rc('text', usetex=True)
     plt.rc('font', family='serif')
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(dpi=150)
     ax.plot(U, LAM, '.-')
     ax.set_xlabel('$u$')
     ax.set_ylabel('$\lambda$')
