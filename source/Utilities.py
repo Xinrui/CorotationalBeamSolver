@@ -44,26 +44,6 @@ def load_mesh_file(filename):
     return array_nodes, array_elements, number_of_nodes, number_of_elements
 
 
-def plotLoadDisplacementCurve(U, LAM):
-    """ Plot the equilibrium path.
-
-        Args:
-            U: vector of the state parameters at the interesting dof, [ninc x 1]
-            LAM: vector of the control parameters, [ninc x 1]
-    """
-
-    # Plot both configurations
-    plt.rc('text', usetex=True)
-    plt.rc('font', family='serif')
-    fig, ax = plt.subplots(dpi=150)
-    ax.plot(U, LAM, '.-')
-    ax.set_xlabel('$u$')
-    ax.set_ylabel('$\lambda$')
-    ax.set_title('Equilibrium Path')
-    ax.grid()
-    plt.show()
-
-
 def getEtaAndMu(alpha):
     if alpha == 0:
         eta = 1 / 12

@@ -1406,7 +1406,7 @@ class CorotationalBeamElement3D():
 class System():
     def __init__(self):
         self.__dimension = None
-        self._geometry_name = None
+        self.__geometry_name = None
         self.__analysis = "elastic"
 
         self._structure = None
@@ -1422,12 +1422,20 @@ class System():
         self._arc_length = None
 
         self._dirichlet_boundary_condition = []
-        self._load_boundary_condition = []
+        self._load_boundary_condition = None
         self._load_increment_vector = None
 
         self._tolerance = None
         self._max_iteration_steps = None
         self._solver = None
+        
+        self._state_variable = None
+        self._control_parameter = None
+        
+        self._interesting_dof = None
+        self._state_variable_plot = [0.]
+        self._control_parameter_plot = [0.]
+        
 
     @property
     def dimension(self):
@@ -1453,12 +1461,12 @@ class System():
 
     @property
     def geometry_name(self):
-        return self._geometry_name
+        return self.__geometry_name
 
     @geometry_name.setter
     def geometry_name(self, val):
         if isinstance(val, str):
-            self._geometry_name = val
+            self.__geometry_name = val
         else:
             raise TypeError("The name of mesh file must be a string!")
 
@@ -1612,7 +1620,9 @@ class System():
                 co_ele.element_freedom_table = iele
 
                 structure.append(co_ele)
-                
+        
+        self._state_variable = np.zeros((self._number_of_dofs, 1), dtype=float)
+        self._control_parameter = 0.
         self._structure = structure
 
     def initialize_with_plasticity(self, *parameters):
@@ -1666,18 +1676,18 @@ class System():
     def add_load_bc(self, node, dof, direction):
         if self.dimension == 2:
             if dof == "x":
-                self._load_boundary_condition.append(3 * node)
+                self._load_boundary_condition = 3 * node
             elif dof == "y":
-                self._load_boundary_condition.append(3 * node + 1)
+                self._load_boundary_condition = 3 * node + 1
             elif dof == "m":
-                self._load_boundary_condition.append(3 * node + 2)
+                self._load_boundary_condition = 3 * node + 2
         else:
             if dof == "x":
-                self._load_boundary_condition.append(6 * node)
+                self._load_boundary_condition = 6 * node
             elif dof == "y":
-                self._load_boundary_condition.append(6 * node + 1)
+                self._load_boundary_condition = 6 * node + 1
             elif dof == "m":
-                self._load_boundary_condition.append(6 * node + 2)
+                self._load_boundary_condition = 6 * node + 2
 
         self._load_increment_vector = np.zeros(
             (self._number_of_dofs, 1), dtype=float)
@@ -1688,6 +1698,7 @@ class System():
         else:
             raise ValueError("Please assign the correct load direction!")
 
+    @property
     def master_stiffness_matrix(self):
         """ Assemble system stiffness matrix K from member stiffness matrices.
 
@@ -1718,7 +1729,8 @@ class System():
                       ] = K[eft[idof], eft[jdof]]
         return K
 
-    def modified_master_stiffness_matrix(self, K):
+    @property
+    def modified_master_stiffness_matrix(self):
         """ Modify the system stiffness matrix K to K_s according to Drichlet
             Boundary Conditions.
 
@@ -1729,15 +1741,17 @@ class System():
             Returns:
                 K_s: the modified system stiffness matrix, [ndof x ndof]
         """
-        K_s = np.copy(K)
+        K_s = np.copy(self.master_stiffness_matrix)
 
         for idof in self._dirichlet_boundary_condition:
             for jentry in range(self._number_of_dofs):
                 K_s[idof, jentry] = 0.
                 K_s[jentry, idof] = 0.
                 K_s[idof, idof] = 1.
+                
         return K_s
 
+    @property
     def internal_force_vector(self):
         """ Assemble global internal force vector F_int extracting the internal
             force vector of every beam element.
@@ -1756,8 +1770,34 @@ class System():
             for idof, iEFT in enumerate(ele.element_freedom_table):
                 F_int[iEFT] += ele.global_force[idof]
         return F_int
+    
+    @property
+    def residual(self):
+        return self.internal_force_vector - self._control_parameter * self._load_increment_vector
 
-    def update_member_data(self, u, deltau):
+    @property
+    def modified_residual(self):
+        """ Modify the residual according to Drichlet Boundary Conditions.
+
+            Args:
+                r: the residual of the system, [ndof x 1]
+                DBCdof: a list contains the dofs, such as [0, 1, 2]
+
+            Returns:
+                r: the MODIFIED residual of the system, [ndof x 1]
+        """
+        modified_residual = np.copy(self.residual)
+        
+        for idof in self._dirichlet_boundary_condition:
+            modified_residual[idof] = 0.
+            
+        return modified_residual
+    
+    @property
+    def residual_norm(self):
+        return np.linalg.norm(self.modified_residual)
+    
+    def update_member_data(self, u, lam, deltau):
         """ Update nodal displacements, local forces and storage vector.
 
             Args:
@@ -1783,6 +1823,10 @@ class System():
                     ele.perform_exponential_hardening()
                 elif ele.analysis == "ramberg-osgood hardening":
                     ele.perform_ramberg_osgood_hardening()
+                    
+            self._state_variable = u
+            self._control_parameter = lam
+            
         else:
             for iele, ele in enumerate(self._structure):
                 ele.incremental_global_displacement = u[6 *
@@ -1820,71 +1864,121 @@ class System():
                 ele.current_orientation_node_2 = expm(util.getSkewSymmetric(
                     deltau[6 * iele + 9: 6 * iele + 12])) @ ele.current_orientation_node_2
 
-    def modified_residual(self, r):
-        """ Modify the residual according to Drichlet Boundary Conditions.
 
-            Args:
-                r: the residual of the system, [ndof x 1]
-                DBCdof: a list contains the dofs, such as [0, 1, 2]
-
-            Returns:
-                r: the MODIFIED residual of the system, [ndof x 1]
-        """
-        for idof in self._dirichlet_boundary_condition:
-            r[idof] = 0
-        return r
 
     def load_control(self):
-        return
-    
-    def displacement_control(self):
-        return
-    
-    def arc_length_control(self):
-        U = np.array([0.], dtype=float)
-        LAM = np.array([0.], dtype=float)
-        u = np.zeros((self._number_of_dofs, 1), dtype=float)
-        lam = 0.
-        Deltau_prev = np.ones((self._number_of_dofs, 1), dtype=float)
         for n in range(self.number_of_load_increments):
+            dF = self.max_load / self.number_of_load_increments * self._load_increment_vector
 
-            # set the predictor by equal load increments
-            K = self.master_stiffness_matrix()
-            K_s = self.modified_master_stiffness_matrix(K)
-
-            deltaubar = np.linalg.solve(K_s, self._load_increment_vector)
-            Deltalam = np.sign(float(Deltau_prev.T @ deltaubar)) * self._arc_length / np.sqrt(float(deltaubar.T @ deltaubar))
-            lam += Deltalam
-            Delta_increment = Deltalam * self._load_increment_vector
-            Deltau = np.linalg.solve(K_s, Delta_increment)
- 
-            u += Deltau
+            Deltau = np.linalg.solve(self.modified_master_stiffness_matrix, dF)
+            Deltalam = self.max_load / self.number_of_load_increments
+            
+            u_pre = self._state_variable + Deltau
+            lam_pre = self._control_parameter + Deltalam
 
             # update member data
-            self.update_member_data(u, Deltau)
-
-            # calculate internal force vector
-            F_int = self.internal_force_vector()
-
-            # calculate the residual of the system
-            r = F_int - lam * self._load_increment_vector
-            r = self.modified_residual(r)
-            r_norm = np.linalg.norm(r)
+            self.update_member_data(u_pre, lam_pre, Deltau)
 
             # initialize iteration counter
             kiter = 0
+
             deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
-            deltalam = 0.
+            
+            # plastic_strain = []
+            # internal_hardening_variable = []
+            # for ele in self._structure:
+            #     plastic_strain.append(ele.__plastic_strain)
+            #     internal_hardening_variable.append(
+            #         ele.__internal_hardening_variable)
 
             # iterate, until good result or so many iteration steps
-            while(r_norm > self.tolerance and kiter < self.max_iteration_steps):
+            while(self.residual_norm > self.tolerance and kiter < self.max_iteration_steps):
+                deltau -= np.linalg.solve(self.modified_master_stiffness_matrix, self.modified_residual)
+                self.update_member_data(u_pre + deltau, lam_pre, deltau)
 
-                # load-Control
-                K = self.master_stiffness_matrix()
-                K_s = self.modified_master_stiffness_matrix(K)
+                # update iterations counter
+                kiter += 1
+                if(kiter == self.max_iteration_steps):
+                    raise RuntimeError(
+                        'Newton-Raphson iterations did not converge!')
+
+            self._state_variable_plot.append(float(self._state_variable[self._interesting_dof]))
+            self._control_parameter_plot.append(self._control_parameter)
+    
+    def displacement_control(self):
+        for n in range(self.number_of_load_increments):
+            u_hat = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
+            
+            Deltalam = float(self._max_displacement / (self.number_of_load_increments * u_hat[self._load_boundary_condition]))
+            
+            dF = Deltalam * self._load_increment_vector
+
+            Deltau = np.linalg.solve(self.modified_master_stiffness_matrix, dF)
+            
+            u_pre = self._state_variable + Deltau
+            lam_pre = self._control_parameter + Deltalam
+
+            # update member data
+            self.update_member_data(u_pre, lam_pre, Deltau)
+
+            # initialize iteration counter
+            kiter = 0
+
+            deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
+            deltalam = 0.
+            
+            # plastic_strain = []
+            # internal_hardening_variable = []
+            # for ele in self._structure:
+            #     plastic_strain.append(ele.__plastic_strain)
+            #     internal_hardening_variable.append(
+            #         ele.__internal_hardening_variable)
+
+            # iterate, until good result or so many iteration steps
+            while(self.residual_norm > self.tolerance and kiter < self.max_iteration_steps):
+                u_invhat = np.linalg.solve(self.modified_master_stiffness_matrix, self.modified_residual)
+                u_hat = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
                 
-                deltau_star = np.linalg.solve(K_s, -r)
-                deltau_bar = np.linalg.solve(K_s, self._load_increment_vector)
+                deltalam += float(u_invhat[self._load_boundary_condition] / u_hat[self._load_boundary_condition])
+                deltau -= np.linalg.solve(self.modified_master_stiffness_matrix, self.modified_residual - float(u_invhat[self._load_boundary_condition] / u_hat[self._load_boundary_condition]) * self._load_increment_vector)
+                self.update_member_data(u_pre + deltau, lam_pre + deltalam, deltau)
+
+                # update iterations counter
+                kiter += 1
+                if(kiter == self.max_iteration_steps):
+                    raise RuntimeError(
+                        'Newton-Raphson iterations did not converge!')
+
+            self._state_variable_plot.append(float(self._state_variable[self._interesting_dof]))
+            self._control_parameter_plot.append(self._control_parameter)
+    
+    def arc_length_control(self):
+        Deltau_prev = np.ones((self._number_of_dofs, 1), dtype=float)
+        for n in range(self.number_of_load_increments):
+
+            deltaubar = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
+            Deltalam = np.sign(float(Deltau_prev.T @ deltaubar)) * self._arc_length / np.sqrt(float(deltaubar.T @ deltaubar))
+            
+            Delta_increment = Deltalam * self._load_increment_vector
+            Deltau = np.linalg.solve(self.modified_master_stiffness_matrix, Delta_increment)
+
+            u_pre = self._state_variable + Deltau
+            lam_pre = self._control_parameter + Deltalam
+            
+            # update member data
+            self.update_member_data(u_pre, lam_pre, Deltau)
+            
+            # initialize iteration counter
+            kiter = 0
+            
+            deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
+            deltalam = 0.
+            
+            # iterate, until good result or so many iteration steps
+            while(self.residual_norm > self.tolerance and kiter < self.max_iteration_steps):
+                
+                deltau_star = np.linalg.solve(self.modified_master_stiffness_matrix, -self.modified_residual)
+                deltau_bar = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
                 Deltau += deltau
                 
                 a = float(deltau_bar.T @ deltau_bar)
@@ -1904,15 +1998,7 @@ class System():
                     deltau += (deltau_star + deltalam2_hat * deltau_bar)
                     
                 # update member data
-                self.update_member_data(u + deltau, deltau)
-
-                # calculate internal force vector
-                F_int = self.internal_force_vector()
-
-                # calculate the residual of the system
-                r = F_int - (lam + deltalam) * self._load_increment_vector
-                r = self.modified_residual(r)
-                r_norm = np.linalg.norm(r)
+                self.update_member_data(u_pre + deltau, lam_pre + deltalam, deltau)
 
                 # update iterations counter
                 kiter += 1
@@ -1925,23 +2011,20 @@ class System():
             3. Update variables to their final value for the current increment
             ------------------------------------------------------------------
             """
-            u += deltau
+            # self._state_variable += deltau
             Deltau_prev = Deltau + deltau
-            lam += deltalam
+            # self._control_parameter += deltalam
 
-            U = np.append(U, -u[self._load_boundary_condition])
-            LAM = np.append(LAM, lam)
-
-        return U, LAM
+            self._state_variable_plot.append(float(self._state_variable[self._interesting_dof]))
+            self._control_parameter_plot.append(self._control_parameter)
     
     def solve_the_system(self):
         if self._solver == "load-control":
-            U, LAM = self.load_control()
+            self.load_control()
         elif self._solver == "displacement-control":
-            U, LAM = self.displacement_control()
+            self.displacement_control()
         elif self._solver == "arc-length-control":
-            U, LAM = self.arc_length_control()
-        return U, LAM
+            self.arc_length_control()
     
     def solve_the_system_(self):
         lam = 0.
@@ -2125,6 +2208,26 @@ class System():
 
         return U, LAM
 
+
+    def plot_equilibrium_path(self):
+        """ Plot the equilibrium path.
+
+            Args:
+                U: vector of the state parameters at the interesting dof, [ninc x 1]
+                LAM: vector of the control parameters, [ninc x 1]
+        """
+
+        # Plot both configurations
+        plt.rc('text', usetex=True)
+        plt.rc('font', family='serif')
+        fig, ax = plt.subplots()
+        ax.plot(self._state_variable_plot, self._control_parameter_plot, '.-')
+        ax.set_xlabel('$u$')
+        ax.set_ylabel('$\lambda$')
+        ax.set_title('Equilibrium Path')
+        ax.grid()
+        plt.show()
+    
     def plot_the_structure(self):
         """ Plot the UNDEFORMED and the DEFORMED structure.
             Args:
@@ -2153,7 +2256,7 @@ class System():
             # Plot both configurations
             plt.rc('text', usetex=True)
             plt.rc('font', family='serif')
-            fig, ax = plt.subplots(dpi=150)
+            fig, ax = plt.subplots()
             ax.plot(X, Y, '.--', label='undeformed configuration')
             # ax.scatter(X, Y)
             ax.plot(x, y, '.-', label='deformed configuration')
@@ -2188,7 +2291,7 @@ class System():
                     z[iele + 1] = self._structure[iele].current_coordinate_node_2[2]
             plt.rc('text', usetex=True)
             plt.rc('font', family='serif')
-            fig = plt.figure(dpi=150)
+            fig = plt.figure()
             # ax = fig.add_subplot(111, projection='3d')
             ax = plt.axes(projection='3d')
             ax.plot(X, Y, Z, '.--', label='undeformed configuration')
