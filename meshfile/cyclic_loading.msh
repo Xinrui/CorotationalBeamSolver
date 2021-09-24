@@ -1,0 +1,9 @@
+MESH dimension 3 ElemType Linear Nnode 2
+Coordinates
+    1              60               0               0
+    2               0               0               0
+End Coordinates
+
+Elements
+1 2 1
+End Elements

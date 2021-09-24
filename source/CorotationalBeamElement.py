@@ -7,8 +7,11 @@ from math import atan2
 
 import matplotlib.pyplot as plt
 import numpy as np
+# import scipy as sp
 from numpy import cos, sin  # , tan
 from scipy.linalg import expm, logm
+from scipy.sparse import coo_matrix, csr_matrix
+from scipy.sparse.linalg import spsolve
 
 import source.Utilities as util
 
@@ -21,22 +24,22 @@ class CorotationalBeamElement2D():
 
     def __init__(self):
         """
-        To initialize a 2D coroational beam element, the nodal coordinates in 
+        To initialize a 2D coroational beam element, the nodal coordinates in
         undeformed configuration (X1, Y1) and (X2, Y2), and of course, Young's
         modulus, are necessary.
 
-        The solver can deal with rectangular cross section. In elastic 
-        analysis, it is enough knowing cross-sectional area 'A' and moment of 
+        The solver can deal with rectangular cross section. In elastic
+        analysis, it is enough knowing cross-sectional area 'A' and moment of
         inertia 'I'. However, in elasto-plasticity, we need to know the stress
         at some certain points. The stress depends on the shape of the beam,
-        so instead of A and I, the user should input the width 'b' and the 
+        so instead of A and I, the user should input the width 'b' and the
         height 'h' of the beam, then A = b * h and I = b * h ^ 3 / 12.
 
-        As for elasto-plasticity, only linear isotropic hardening is 
-        implemented. In this case yield stress and plastic modulus must be 
+        As for elasto-plasticity, only linear isotropic hardening is
+        implemented. In this case yield stress and plastic modulus must be
         considered, because local force and local material stiffness matrix
         cannot be directly calculated(due to unhomogeneous stress distribution),
-        Gauss integration is adopted here. The user can input his/her number 
+        Gauss integration is adopted here. The user can input his/her number
         of Gauss locations, or use the default value from this program.
 
 
@@ -51,10 +54,11 @@ class CorotationalBeamElement2D():
         self.__width = None
         self.__height = None
 
-        self.__analysis = None
+        self.__analysis = "elastic"
         self.__beamtype = "Bernoulli"
 
         self.__youngs_modulus = None
+        self.__shear_modulus = None
 
         self.__element_freedom_table = None
 
@@ -64,6 +68,9 @@ class CorotationalBeamElement2D():
 
         # All plastic cases, including Perfect Plasticity / No Hardening
         self.__yield_stress = None
+
+        # Kinematic Hardening
+        self.__kinematic_hardening_modulus = 0.0
 
         # Linear Hardening
         self.__plastic_modulus = None
@@ -77,7 +84,7 @@ class CorotationalBeamElement2D():
         # Ramberg-Osgood Hardening
         self.__modified_modulus = None
 
-        # "exponent" appears in both Exponential Hardening and Ramberg-Osgood 
+        # "exponent" appears in both Exponential Hardening and Ramberg-Osgood
         # Hardening with different physical meaning
         self.__exponent = None
 
@@ -198,6 +205,26 @@ class CorotationalBeamElement2D():
             self.__youngs_modulus = val
 
     @property
+    def shear_modulus(self):
+        return self.__shear_modulus
+
+    @shear_modulus.setter
+    def shear_modulus(self, val):
+        """Set the Shear modulus of the beam element: __shear_modulus > 0.
+
+        Raises:
+            TypeError: If value is not a positive float number.
+
+        """
+
+        if not isinstance(val, float):
+            raise TypeError("Shear modulus must be a float number!")
+        elif val <= 0:
+            raise ValueError("Shear modulus must be positive!")
+        else:
+            self.__shear_modulus = val
+
+    @property
     def width(self):
         return self.__width
 
@@ -240,6 +267,42 @@ class CorotationalBeamElement2D():
             self.__height = val
 
     @property
+    def plastic_strain(self):
+        return self.__plastic_strain
+
+    @plastic_strain.setter
+    def plastic_strain(self, val):
+        if not isinstance(val, np.ndarray):
+            raise TypeError(
+                "The plastic strain at gauss points of beam must be a numpy array!")
+        else:
+            self.__plastic_strain = val
+
+    @property
+    def internal_hardening_variable(self):
+        return self.__internal_hardening_variable
+
+    @internal_hardening_variable.setter
+    def internal_hardening_variable(self, val):
+        if not isinstance(val, np.ndarray):
+            raise TypeError(
+                "The internal hardening variable at gauss points of beam must be a numpy array!")
+        else:
+            self.__internal_hardening_variable = val
+
+    @property
+    def back_stress(self):
+        return self.__back_stress
+
+    @back_stress.setter
+    def back_stress(self, val):
+        if not isinstance(val, np.ndarray):
+            raise TypeError(
+                "The back stress at gauss points of beam must be a numpy array!")
+        else:
+            self.__back_stress = val
+
+    @property
     def analysis(self):
         return self.__analysis
 
@@ -253,6 +316,8 @@ class CorotationalBeamElement2D():
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__plastic_strain = np.zeros(
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__back_stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__tangent_modulus = self.__youngs_modulus * \
                 np.ones((self.__num_of_gauss_locations_ksi,
                         self.__num_of_gauss_locations_eta), dtype=float)
@@ -261,6 +326,8 @@ class CorotationalBeamElement2D():
             self.__stress = np.zeros(
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__plastic_strain = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__back_stress = np.zeros(
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__tangent_modulus = self.__youngs_modulus * \
                 np.ones((self.__num_of_gauss_locations_ksi,
@@ -273,6 +340,8 @@ class CorotationalBeamElement2D():
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__plastic_strain = np.zeros(
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__back_stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__tangent_modulus = self.__youngs_modulus * \
                 np.ones((self.__num_of_gauss_locations_ksi,
                         self.__num_of_gauss_locations_eta), dtype=float)
@@ -284,6 +353,8 @@ class CorotationalBeamElement2D():
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__plastic_strain = np.zeros(
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__back_stress = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__tangent_modulus = self.__youngs_modulus * \
                 np.ones((self.__num_of_gauss_locations_ksi,
                         self.__num_of_gauss_locations_eta), dtype=float)
@@ -294,6 +365,8 @@ class CorotationalBeamElement2D():
             self.__stress = np.zeros(
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__plastic_strain = np.zeros(
+                (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
+            self.__back_stress = np.zeros(
                 (self.__num_of_gauss_locations_ksi, self.__num_of_gauss_locations_eta), dtype=float)
             self.__tangent_modulus = self.__youngs_modulus * \
                 np.ones((self.__num_of_gauss_locations_ksi,
@@ -346,6 +419,28 @@ class CorotationalBeamElement2D():
             self.__yield_stress = val
 
     @property
+    def kinematic_hardening_modulus(self):
+        return self.__kinematic_hardening_modulus
+
+    @kinematic_hardening_modulus.setter
+    def kinematic_hardening_modulus(self, val):
+        """
+        Set the kinematic hardening modulus of the beam element.
+
+        Raises:
+            TypeError: If value is not a float number.
+            ValueError: If value is not positive.
+
+        """
+        if not isinstance(val, float):
+            raise TypeError(
+                "Kinematic hardening modulus must be a float number!")
+        elif val <= 0:
+            raise ValueError("Kinematic hardening modulus must be positive!")
+        else:
+            self.__kinematic_hardening_modulus = val
+
+    @property
     def plastic_modulus(self):
         return self.__plastic_modulus
 
@@ -386,7 +481,7 @@ class CorotationalBeamElement2D():
             raise ValueError("Quadratic coefficient must be positive!")
         else:
             self.__quadratic_coefficient = val
-    
+
     @property
     def saturation_stress(self):
         return self.__saturation_stress
@@ -407,7 +502,7 @@ class CorotationalBeamElement2D():
             raise ValueError("Saturation stress must be positive!")
         else:
             self.__saturation_stress = val
-            
+
     @property
     def modified_modulus(self):
         return self.__modified_modulus
@@ -428,7 +523,7 @@ class CorotationalBeamElement2D():
             raise ValueError("Modified modulus must be positive!")
         else:
             self.__modified_modulus = val
-            
+
     @property
     def exponent(self):
         return self.__exponent
@@ -649,24 +744,29 @@ class CorotationalBeamElement2D():
                 stress_trial = self.__youngs_modulus * \
                     (float(self.axial_strain(x, z)) -
                      self.__plastic_strain[iksi, jeta])
+                relative_stress_trial = stress_trial - \
+                    self.__back_stress[iksi, jeta]
                 yield_condition_trial = np.abs(
-                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+                    relative_stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
 
                 if yield_condition_trial <= 0:
                     self.__stress[iksi, jeta] = stress_trial
                     self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
                 else:
                     deltagamma = yield_condition_trial / \
-                        (self.__youngs_modulus + self.__plastic_modulus)
-                    self.__stress[iksi, jeta] = (
-                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                        (self.__youngs_modulus + self.__plastic_modulus +
+                         self.__kinematic_hardening_modulus)
+                    self.__stress[iksi, jeta] = stress_trial - deltagamma * \
+                        self.__youngs_modulus * np.sign(relative_stress_trial)
                     self.__plastic_strain[iksi,
-                                          jeta] += deltagamma * np.sign(stress_trial)
+                                          jeta] += deltagamma * np.sign(relative_stress_trial)
+                    self.__back_stress += deltagamma * \
+                        self.__kinematic_hardening_modulus * \
+                        np.sign(relative_stress_trial)
                     self.__internal_hardening_variable[iksi,
                                                        jeta] += deltagamma
-                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * \
-                        self.__plastic_modulus / \
-                        (self.__youngs_modulus + self.__plastic_modulus)
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * (self.__plastic_modulus + self.__kinematic_hardening_modulus) / (
+                        self.__youngs_modulus + self.__plastic_modulus + self.__kinematic_hardening_modulus)
 
     def perform_quadratic_hardening(self):
         gauss_locations_ksi = np.polynomial.legendre.leggauss(
@@ -724,15 +824,17 @@ class CorotationalBeamElement2D():
                 stress_trial = self.__youngs_modulus * \
                     (float(self.axial_strain(x, z)) -
                      self.__plastic_strain[iksi, jeta])
+                relative_stress_trial = stress_trial - \
+                    self.__back_stress[iksi, jeta]
                 yield_condition_trial = np.abs(
-                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+                    relative_stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
 
                 if yield_condition_trial <= 0:
                     self.__stress[iksi, jeta] = stress_trial
                     self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
                 else:
                     deltagamma = 0
-                    residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                    residual = yield_condition_trial - deltagamma * (self.__youngs_modulus + self.__kinematic_hardening_modulus) - yield_stress_function(
                         self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
 
                     maxiter = 10
@@ -740,23 +842,26 @@ class CorotationalBeamElement2D():
                     tolerance = 1.0e-5
 
                     while residual > tolerance and iteration_counter < maxiter:
-                        dR_ddeltagamma = -self.__youngs_modulus - hardening_limit_stress * self.__exponent * \
+                        dR_ddeltagamma = -(self.__youngs_modulus + self.__kinematic_hardening_modulus) - hardening_limit_stress * self.__exponent * \
                             np.exp(-self.__exponent *
                                    (self.__internal_hardening_variable[iksi, jeta] + deltagamma))
                         d_g = - residual / dR_ddeltagamma
                         deltagamma += d_g
-                        residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                        residual = yield_condition_trial - deltagamma * (self.__youngs_modulus + self.__kinematic_hardening_modulus) - yield_stress_function(
                             self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
                         iteration_counter += 1
 
-                    self.__stress[iksi, jeta] = (
-                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                    self.__stress[iksi, jeta] = stress_trial - deltagamma * \
+                        self.__youngs_modulus * np.sign(relative_stress_trial)
                     self.__plastic_strain[iksi,
-                                          jeta] += deltagamma * np.sign(stress_trial)
+                                          jeta] += deltagamma * np.sign(relative_stress_trial)
+                    self.__back_stress += deltagamma * \
+                        self.__kinematic_hardening_modulus * \
+                        np.sign(relative_stress_trial)
                     self.__internal_hardening_variable[iksi,
                                                        jeta] += deltagamma
-                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * hardening_limit_stress * self.__exponent * np.exp(-self.__exponent * self.__internal_hardening_variable[iksi, jeta]) / (
-                        self.__youngs_modulus + hardening_limit_stress * self.__exponent * np.exp(-self.__exponent * self.__internal_hardening_variable[iksi, jeta]))
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * (self.__kinematic_hardening_modulus + hardening_limit_stress * self.__exponent * np.exp(-self.__exponent * self.__internal_hardening_variable[iksi, jeta])) / (
+                        self.__youngs_modulus + self.__kinematic_hardening_modulus + hardening_limit_stress * self.__exponent * np.exp(-self.__exponent * self.__internal_hardening_variable[iksi, jeta]))
 
     def perform_ramberg_osgood_hardening(self):
         gauss_locations_ksi = np.polynomial.legendre.leggauss(
@@ -774,15 +879,17 @@ class CorotationalBeamElement2D():
                 stress_trial = self.__youngs_modulus * \
                     (float(self.axial_strain(x, z)) -
                      self.__plastic_strain[iksi, jeta])
+                relative_stress_trial = stress_trial - \
+                    self.__back_stress[iksi, jeta]
                 yield_condition_trial = np.abs(
-                    stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
+                    relative_stress_trial) - yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
 
                 if yield_condition_trial <= 0:
                     self.__stress[iksi, jeta] = stress_trial
                     self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus
                 else:
                     deltagamma = 0
-                    residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                    residual = yield_condition_trial - deltagamma * (self.__youngs_modulus + self.__kinematic_hardening_modulus) - yield_stress_function(
                         self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
 
                     maxiter = 10
@@ -790,23 +897,26 @@ class CorotationalBeamElement2D():
                     tolerance = 1.0e-5
 
                     while residual > tolerance and iteration_counter < maxiter:
-                        dR_ddeltagamma = -self.__youngs_modulus - self.__exponent * self.__modified_modulus * \
+                        dR_ddeltagamma = -(self.__youngs_modulus + self.__kinematic_hardening_modulus) - self.__exponent * self.__modified_modulus * \
                             np.power(
                                 self.__internal_hardening_variable[iksi, jeta] + deltagamma, self.__exponent - 1)
                         d_g = - residual / dR_ddeltagamma
                         deltagamma += d_g
-                        residual = yield_condition_trial - deltagamma * self.__youngs_modulus - yield_stress_function(
+                        residual = yield_condition_trial - deltagamma * (self.__youngs_modulus + self.__kinematic_hardening_modulus) - yield_stress_function(
                             self.__internal_hardening_variable[iksi, jeta] + deltagamma) + yield_stress_function(self.__internal_hardening_variable[iksi, jeta])
                         iteration_counter += 1
 
-                    self.__stress[iksi, jeta] = (
-                        1 - deltagamma * self.__youngs_modulus / np.abs(stress_trial)) * stress_trial
+                    self.__stress[iksi, jeta] = stress_trial - deltagamma * \
+                        self.__youngs_modulus * np.sign(relative_stress_trial)
                     self.__plastic_strain[iksi,
-                                          jeta] += deltagamma * np.sign(stress_trial)
+                                          jeta] += deltagamma * np.sign(relative_stress_trial)
+                    self.__back_stress += deltagamma * \
+                        self.__kinematic_hardening_modulus * \
+                        np.sign(relative_stress_trial)
                     self.__internal_hardening_variable[iksi,
                                                        jeta] += deltagamma
-                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * self.__exponent * self.__modified_modulus * np.power(self.__internal_hardening_variable[iksi, jeta], self.__exponent - 1) / (
-                        self.__youngs_modulus + self.__exponent * self.__modified_modulus * np.power(self.__internal_hardening_variable[iksi, jeta], self.__exponent - 1))
+                    self.__tangent_modulus[iksi, jeta] = self.__youngs_modulus * (self.__kinematic_hardening_modulus + self.__exponent * self.__modified_modulus * np.power(self.__internal_hardening_variable[iksi, jeta], self.__exponent - 1)) / (
+                        self.__youngs_modulus + self.__kinematic_hardening_modulus + self.__exponent * self.__modified_modulus * np.power(self.__internal_hardening_variable[iksi, jeta], self.__exponent - 1))
 
     @property
     def transformation_matrix(self):
@@ -878,19 +988,17 @@ class CorotationalBeamElement3D():
             X2: The position vector of the 2nd node in undeformed state
             __youngs_modulus: Young's modulus
             A: Cross-Sectional areas
-            _moment_of_inertia_y: 2nd moments of inertia
+            moment_of_inertia_y: 2nd moments of inertia
         """
         self.__initial_coordinate_node_1 = None
         self.__initial_coordinate_node_2 = None
         self.__incremental_global_displacement = np.zeros((12, 1), dtype=float)
 
         self.__youngs_modulus = None
-        self._shear_modulus = None
-        self._area = None
+        self.__shear_modulus = None
 
-        self._moment_of_inertia_y = None
-        self._moment_of_inertia_z = None
-        self._polar_moment_of_inertia = None
+        self.__width = None
+        self.__height = None
 
         self._current_frame_node_1 = np.eye(3)
         self._current_frame_node_2 = np.eye(3)
@@ -946,6 +1054,48 @@ class CorotationalBeamElement3D():
         else:
             raise TypeError(
                 "Global displacement must be a 6x1 array!")
+
+    @property
+    def width(self):
+        return self.__width
+
+    @width.setter
+    def width(self, val):
+        """
+        Set the width of the beam element.
+
+        Raises:
+            TypeError: If value is not a float number.
+            ValueError: If value is not positive.
+
+        """
+        if not isinstance(val, float):
+            raise TypeError("The width of beam must be a float number!")
+        elif val <= 0:
+            raise ValueError("The width of beam must be positive!")
+        else:
+            self.__width = val
+
+    @property
+    def height(self):
+        return self.__height
+
+    @height.setter
+    def height(self, val):
+        """
+        Set the height of the beam element.
+
+        Raises:
+            TypeError: If value is not a float number.
+            ValueError: If value is not positive.
+
+        """
+        if not isinstance(val, float):
+            raise TypeError("The height of beam must be a float number!")
+        elif val <= 0:
+            raise ValueError("The height of beam must be positive!")
+        else:
+            self.__height = val
 
     @property
     def current_coordinate_node_1(self):
@@ -1029,11 +1179,11 @@ class CorotationalBeamElement3D():
 
     @property
     def shear_modulus(self):
-        return self._shear_modulus
+        return self.__shear_modulus
 
     @shear_modulus.setter
     def shear_modulus(self, val):
-        """Set the Shear modulus of the beam element: _shear_modulus > 0.
+        """Set the Shear modulus of the beam element: __shear_modulus > 0.
 
         Raises:
             TypeError: If value is not a positive float number.
@@ -1045,83 +1195,57 @@ class CorotationalBeamElement3D():
         elif val <= 0:
             raise ValueError("Shear modulus must be positive!")
         else:
-            self._shear_modulus = val
+            self.__shear_modulus = val
 
     @property
     def area(self):
-        return self._area
+        """
+        Set the cross-sectional area of the beam element.
 
-    @area.setter
-    def area(self, val):
-        """Set the cross-sectional area of the beam element: A > 0.
-
-        Raises:
-            TypeError: If value is not a positive float number.
+        A = b * h
 
         """
-        if not isinstance(val, float):
-            raise TypeError("Cross-sectional area must be a float number!")
-        elif val <= 0:
-            raise ValueError("Cross-sectional area must be positive!")
-        else:
-            self._area = val
+        return self.__width * self.__height
 
     @property
     def moment_of_inertia_y(self):
-        return self._moment_of_inertia_y
+        """
+        Set the moment of inertia Iy / I33 of the beam element.
 
-    @moment_of_inertia_y.setter
-    def moment_of_inertia_y(self, val):
-        """Set the moment of inertia of the beam element: I > 0.
-
-        Raises:
-            TypeError: If value is not a positive float number.
+        I_y = 1/12 * b * h^3
 
         """
-        if not isinstance(val, float):
-            raise TypeError("Moment of inertia must be a float number!")
-        elif val <= 0:
-            raise ValueError("Moment of inertia must be positive!")
-        else:
-            self._moment_of_inertia_y = val
+        return 1/12 * self.__width * (self.__height) ** 3
 
     @property
     def moment_of_inertia_z(self):
-        return self._moment_of_inertia_z
+        """
+        Set the moment of inertia Iz / I22 of the beam element.
 
-    @moment_of_inertia_z.setter
-    def moment_of_inertia_z(self, val):
-        """Set the moment of inertia of the beam element: I > 0.
-
-        Raises:
-            TypeError: If value is not a positive float number.
+        I_z = 1/12 * b^3 * h
 
         """
-        if not isinstance(val, float):
-            raise TypeError("Moment of inertia must be a float number!")
-        elif val <= 0:
-            raise ValueError("Moment of inertia must be positive!")
-        else:
-            self._moment_of_inertia_z = val
+        return 1/12 * (self.__width) ** 3 * self.__height
 
     @property
     def polar_moment_of_inertia(self):
-        return self._polar_moment_of_inertia
+        """
+        Set the polar moment of inertia Io of the beam element.
 
-    @polar_moment_of_inertia.setter
-    def polar_moment_of_inertia(self, val):
-        """Set the moment of inertia of the beam element: I > 0.
-
-        Raises:
-            TypeError: If value is not a positive float number.
+        I_o = 1/12 * (b^3 * h + b * h^3)
 
         """
-        if not isinstance(val, float):
-            raise TypeError("Moment of inertia must be a float number!")
-        elif val <= 0:
-            raise ValueError("Moment of inertia must be positive!")
-        else:
-            self._polar_moment_of_inertia = val
+        return 1/12 * (self.__width * (self.__height) ** 3 + (self.__width) ** 3 * self.__height)
+
+    @property
+    def fourth_order_polar_moment_of_inertia(self):
+        """
+        Set the 4th polar moment of inertia Io of the beam element.
+
+        I_rr = b^5 * h / 80 + b^3 * h^3 / 72 + b * h^5 / 80
+
+        """
+        return 1/80 * (self.__width * (self.__height) ** 5 + (self.__width) ** 5 * self.__height) + 1/72 * (self.__width) ** 3 * (self.__height) ** 3
 
     @property
     def initial_local_frame(self):
@@ -1146,38 +1270,130 @@ class CorotationalBeamElement3D():
         return np.linalg.norm(self.current_coordinate_node_2 -
                               self.current_coordinate_node_1)
 
+    # @property
+    # def local_material_stiffness(self):
+
+    #     k_l = np.zeros((7, 7), dtype=float)
+
+    #     k_l[0, 0] = self.__youngs_modulus * self.area
+
+    #     k_l[1, 1], k_l[4, 4] = self.__shear_modulus * \
+    #         self.polar_moment_of_inertia, self.__shear_modulus * self.polar_moment_of_inertia
+    #     k_l[1, 4], k_l[4, 1] = -self.__shear_modulus * self.polar_moment_of_inertia, - \
+    #         self.__shear_modulus * self.polar_moment_of_inertia
+
+    #     k_l[2, 2], k_l[5, 5] = 4.0 * self.__youngs_modulus * \
+    #         self.moment_of_inertia_z, 4.0 * self.__youngs_modulus * self.moment_of_inertia_z
+    #     k_l[2, 5], k_l[5, 2] = 2.0 * self.__youngs_modulus * \
+    #         self.moment_of_inertia_z, 2.0 * self.__youngs_modulus * self.moment_of_inertia_z
+
+    #     k_l[3, 3], k_l[6, 6] = 4.0 * self.__youngs_modulus * \
+    #         self.moment_of_inertia_y, 4.0 * self.__youngs_modulus * self.moment_of_inertia_y
+    #     k_l[3, 6], k_l[6, 3] = 2.0 * self.__youngs_modulus * \
+    #         self.moment_of_inertia_y, 2.0 * self.__youngs_modulus * self.moment_of_inertia_y
+
+    #     k_l /= self.initial_length
+
+    #     return k_l
+
     @property
     def local_material_stiffness(self):
-
+        p_l = self.local_displacement
+        
         k_l = np.zeros((7, 7), dtype=float)
 
-        k_l[0, 0] = self.__youngs_modulus * self._area
+        k_l[0, 0] = 1.0 * self.area * \
+            self.__youngs_modulus / self.initial_length
+        k_l[0, 1] = 1.0 * self.__youngs_modulus * (self.moment_of_inertia_z * p_l[1] - self.moment_of_inertia_z * p_l[4] +
+                                                    self.moment_of_inertia_y * p_l[1] - self.moment_of_inertia_y * p_l[4]) / self.initial_length**2
+        k_l[0, 2] = self.area * self.__youngs_modulus * \
+            (2/15 * p_l[2] -
+              1/30 * p_l[5])
+        k_l[0, 3] = self.area * self.__youngs_modulus * \
+            (2/15 * p_l[3] -
+              1/30 * p_l[6])
+        k_l[0, 4] = 1.0 * self.__youngs_modulus * (-self.moment_of_inertia_z * p_l[1] + self.moment_of_inertia_z * p_l[4] -
+                                                    self.moment_of_inertia_y * p_l[1] + self.moment_of_inertia_y * p_l[4]) / self.initial_length**2
+        k_l[0, 5] = self.area * self.__youngs_modulus * \
+            (-1/30 * p_l[2] +
+              2/15 * p_l[5])
+        k_l[0, 6] = self.area * self.__youngs_modulus * \
+            (-1/30 * p_l[3] +
+              2/15 * p_l[6])
 
-        k_l[1, 1], k_l[4, 4] = self._shear_modulus * \
-            self._polar_moment_of_inertia, self._shear_modulus * self._polar_moment_of_inertia
-        k_l[1, 4], k_l[4, 1] = -self._shear_modulus * self._polar_moment_of_inertia, - \
-            self._shear_modulus * self._polar_moment_of_inertia
+        k_l[1, 1] = 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[6]**2/self.initial_length + 1.0*self.__youngs_modulus*self.moment_of_inertia_z*p_l[0]/self.initial_length**2 + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus * \
+            self.moment_of_inertia_y*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[6]**2/self.initial_length + 1.0*self.__youngs_modulus*self.moment_of_inertia_y*p_l[0]/self.initial_length**2 + 1.5 * \
+            self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]**2/self.initial_length**3 - 3.0*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]*p_l[4]/self.initial_length**3 + \
+            1.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia * \
+            p_l[4]**2/self.initial_length**3 + 1.0*self.__shear_modulus*self.moment_of_inertia_z / \
+            self.initial_length + 1.0*self.__shear_modulus * \
+            self.moment_of_inertia_y/self.initial_length
+        k_l[2, 1] = self.__youngs_modulus*(2/15*self.moment_of_inertia_z*p_l[1]*p_l[2] - 1/30*self.moment_of_inertia_z*p_l[1]*p_l[5] - 2/15*self.moment_of_inertia_z*p_l[4]*p_l[2] + 1/30*self.moment_of_inertia_z*p_l[4]*p_l[5] +
+                                            2/15*self.moment_of_inertia_y*p_l[1]*p_l[2] - 1/30*self.moment_of_inertia_y*p_l[1]*p_l[5] - 2/15*self.moment_of_inertia_y*p_l[4]*p_l[2] + 1/30*self.moment_of_inertia_y*p_l[4]*p_l[5])/self.initial_length
+        k_l[3, 1] = self.__youngs_modulus*(2/15*self.moment_of_inertia_z*p_l[1]*p_l[3] - 1/30*self.moment_of_inertia_z*p_l[1]*p_l[6] - 2/15*self.moment_of_inertia_z*p_l[4]*p_l[3] + 1/30*self.moment_of_inertia_z*p_l[4]*p_l[6] +
+                                            2/15*self.moment_of_inertia_y*p_l[1]*p_l[3] - 1/30*self.moment_of_inertia_y*p_l[1]*p_l[6] - 2/15*self.moment_of_inertia_y*p_l[4]*p_l[3] + 1/30*self.moment_of_inertia_y*p_l[4]*p_l[6])/self.initial_length
+        k_l[4, 1] = -1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[2]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[2]*p_l[5]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[5]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[3]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[3]*p_l[6]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[6]**2/self.initial_length - 1.0*self.__youngs_modulus*self.moment_of_inertia_z*p_l[0]/self.initial_length**2 - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[2]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[2]*p_l[5]/self.initial_length - 1/15*self.__youngs_modulus * \
+            self.moment_of_inertia_y*p_l[5]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[3]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[3]*p_l[6]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[6]**2/self.initial_length - 1.0*self.__youngs_modulus*self.moment_of_inertia_y*p_l[0]/self.initial_length**2 - 1.5 * \
+            self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]**2/self.initial_length**3 + 3.0*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]*p_l[4]/self.initial_length**3 - \
+            1.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia * \
+            p_l[4]**2/self.initial_length**3 - 1.0*self.__shear_modulus*self.moment_of_inertia_z / \
+            self.initial_length - 1.0*self.__shear_modulus * \
+            self.moment_of_inertia_y/self.initial_length
+        k_l[5, 1] = self.__youngs_modulus*(-1/30*self.moment_of_inertia_z*p_l[1]*p_l[2] + 2/15*self.moment_of_inertia_z*p_l[1]*p_l[5] + 1/30*self.moment_of_inertia_z*p_l[4]*p_l[2] - 2/15*self.moment_of_inertia_z*p_l[4]*p_l[5] -
+                                            1/30*self.moment_of_inertia_y*p_l[1]*p_l[2] + 2/15*self.moment_of_inertia_y*p_l[1]*p_l[5] + 1/30*self.moment_of_inertia_y*p_l[4]*p_l[2] - 2/15*self.moment_of_inertia_y*p_l[4]*p_l[5])/self.initial_length
+        k_l[6, 1] = self.__youngs_modulus*(-1/30*self.moment_of_inertia_z*p_l[1]*p_l[3] + 2/15*self.moment_of_inertia_z*p_l[1]*p_l[6] + 1/30*self.moment_of_inertia_z*p_l[4]*p_l[3] - 2/15*self.moment_of_inertia_z*p_l[4]*p_l[6] -
+                                            1/30*self.moment_of_inertia_y*p_l[1]*p_l[3] + 2/15*self.moment_of_inertia_y*p_l[1]*p_l[6] + 1/30*self.moment_of_inertia_y*p_l[4]*p_l[3] - 2/15*self.moment_of_inertia_y*p_l[4]*p_l[6])/self.initial_length
 
-        k_l[2, 2], k_l[5, 5] = 4.0 * self.__youngs_modulus * \
-            self._moment_of_inertia_z, 4.0 * self.__youngs_modulus * self._moment_of_inertia_z
-        k_l[2, 5], k_l[5, 2] = 2.0 * self.__youngs_modulus * \
-            self._moment_of_inertia_z, 2.0 * self.__youngs_modulus * self._moment_of_inertia_z
+        k_l[2, 2] = self.__youngs_modulus*(2/75*self.area*self.initial_length**2*p_l[2]**2 - 0.0133333333333333*self.area*self.initial_length**2*p_l[2]*p_l[5] + 0.01*self.area*self.initial_length**2*p_l[5]**2 + 2/225*self.area*self.initial_length**2*p_l[3]**2 - 1/225*self.area*self.initial_length**2*p_l[3]*p_l[6] + 2/225*self.area*self.initial_length**2*p_l[6]**2 + 2/15 *
+                                            self.area*self.initial_length*p_l[0] + 1/15*self.moment_of_inertia_z*p_l[1]**2 - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_z*p_l[4]**2 + 1/15*self.moment_of_inertia_y*p_l[1]**2 - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_y*p_l[4]**2 + 4.0*self.moment_of_inertia_y)/self.initial_length
+        k_l[3, 2] = self.area*self.__youngs_modulus*self.initial_length*(4/225*p_l[2]*p_l[3] - 1/225*p_l[2]
+                                                                          * p_l[6] - 1/225*p_l[5]*p_l[3] + 1/900*p_l[5]*p_l[6])
+        k_l[4, 2] = self.__youngs_modulus*(-2/15*self.moment_of_inertia_z*p_l[1]*p_l[2] + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[5] + 2/15*self.moment_of_inertia_z*p_l[4]*p_l[2] - 1/30*self.moment_of_inertia_z*p_l[4]*p_l[5] -
+                                            2/15*self.moment_of_inertia_y*p_l[1]*p_l[2] + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[5] + 2/15*self.moment_of_inertia_y*p_l[4]*p_l[2] - 1/30*self.moment_of_inertia_y*p_l[4]*p_l[5])/self.initial_length
+        k_l[5, 2] = self.__youngs_modulus*(-1/150*self.area*self.initial_length**2*p_l[2]**2 + 0.02*self.area*self.initial_length**2*p_l[2]*p_l[5] - 1/150*self.area*self.initial_length**2*p_l[5]**2 - 1/450*self.area*self.initial_length**2*p_l[3]**2 + 1/900*self.area*self.initial_length**2*p_l[3]*p_l[6] - 1/450*self.area*self.initial_length**2*p_l[6]**2 - 1/30*self.area *
+                                            self.initial_length*p_l[0] - 1/600*self.moment_of_inertia_z*p_l[1]**2 + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[4] - 1/600*self.moment_of_inertia_z*p_l[4]**2 - 1/600*self.moment_of_inertia_y*p_l[1]**2 + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[4] - 1/600*self.moment_of_inertia_y*p_l[4]**2 + 2.0*self.moment_of_inertia_y)/self.initial_length
+        k_l[6, 2] = self.area*self.__youngs_modulus*self.initial_length*(-1/225*p_l[2]*p_l[3] + 4/225*p_l[2]
+                                                                          * p_l[6] + 1/900*p_l[5]*p_l[3] - 1/225*p_l[5]*p_l[6])
 
-        k_l[3, 3], k_l[6, 6] = 4.0 * self.__youngs_modulus * \
-            self._moment_of_inertia_y, 4.0 * self.__youngs_modulus * self._moment_of_inertia_y
-        k_l[3, 6], k_l[6, 3] = 2.0 * self.__youngs_modulus * \
-            self._moment_of_inertia_y, 2.0 * self.__youngs_modulus * self._moment_of_inertia_y
+        k_l[3, 3] = self.__youngs_modulus*(2/225*self.area*self.initial_length**2*p_l[2]**2 - 1/225*self.area*self.initial_length**2*p_l[2]*p_l[5] + 2/225*self.area*self.initial_length**2*p_l[5]**2 + 2/75*self.area*self.initial_length**2*p_l[3]**2 - 0.0133333333333333*self.area*self.initial_length**2*p_l[3]*p_l[6] + 0.01*self.area*self.initial_length**2*p_l[6]**2 + 2/15 *
+                                            self.area*self.initial_length*p_l[0] + 1/15*self.moment_of_inertia_z*p_l[1]**2 - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_z*p_l[4]**2 + 4.0*self.moment_of_inertia_z + 1/15*self.moment_of_inertia_y*p_l[1]**2 - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_y*p_l[4]**2)/self.initial_length
+        k_l[4, 3] = self.__youngs_modulus*(-2/15*self.moment_of_inertia_z*p_l[1]*p_l[3] + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[6] + 2/15*self.moment_of_inertia_z*p_l[4]*p_l[3] - 1/30*self.moment_of_inertia_z*p_l[4]*p_l[6] -
+                                            2/15*self.moment_of_inertia_y*p_l[1]*p_l[3] + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[6] + 2/15*self.moment_of_inertia_y*p_l[4]*p_l[3] - 1/30*self.moment_of_inertia_y*p_l[4]*p_l[6])/self.initial_length
+        k_l[5, 3] = self.area*self.__youngs_modulus*self.initial_length*(-1/225*p_l[2]*p_l[3] + 1/900*p_l[2]
+                                                                          * p_l[6] + 4/225*p_l[5]*p_l[3] - 1/225*p_l[5]*p_l[6])
+        k_l[6, 3] = self.__youngs_modulus*(-1/450*self.area*self.initial_length**2*p_l[2]**2 + 1/900*self.area*self.initial_length**2*p_l[2]*p_l[5] - 1/450*self.area*self.initial_length**2*p_l[5]**2 - 1/150*self.area*self.initial_length**2*p_l[3]**2 + 0.02*self.area*self.initial_length**2*p_l[3]*p_l[6] - 1/150*self.area*self.initial_length**2*p_l[6]**2 - 1/30*self.area *
+                                            self.initial_length*p_l[0] - 1/600*self.moment_of_inertia_z*p_l[1]**2 + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[4] - 1/600*self.moment_of_inertia_z*p_l[4]**2 + 2.0*self.moment_of_inertia_z - 1/600*self.moment_of_inertia_y*p_l[1]**2 + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[4] - 1/600*self.moment_of_inertia_y*p_l[4]**2)/self.initial_length
 
-        k_l /= self.current_length
+        k_l[4, 4] = 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[6]**2/self.initial_length + 1.0*self.__youngs_modulus*self.moment_of_inertia_z*p_l[0]/self.initial_length**2 + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus * \
+            self.moment_of_inertia_y*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[6]**2/self.initial_length + 1.0*self.__youngs_modulus*self.moment_of_inertia_y*p_l[0]/self.initial_length**2 + 1.5 * \
+            self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]**2/self.initial_length**3 - 3.0*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]*p_l[4]/self.initial_length**3 + \
+            1.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia * \
+            p_l[4]**2/self.initial_length**3 + 1.0*self.__shear_modulus*self.moment_of_inertia_z / \
+            self.initial_length + 1.0*self.__shear_modulus * \
+            self.moment_of_inertia_y/self.initial_length
+        k_l[5, 4] = self.__youngs_modulus*(1/30*self.moment_of_inertia_z*p_l[1]*p_l[2] - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[5] - 1/30*self.moment_of_inertia_z*p_l[4]*p_l[2] + 2/15*self.moment_of_inertia_z*p_l[4]*p_l[5] +
+                                            1/30*self.moment_of_inertia_y*p_l[1]*p_l[2] - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[5] - 1/30*self.moment_of_inertia_y*p_l[4]*p_l[2] + 2/15*self.moment_of_inertia_y*p_l[4]*p_l[5])/self.initial_length
+        k_l[6, 4] = self.__youngs_modulus*(1/30*self.moment_of_inertia_z*p_l[1]*p_l[3] - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[6] - 1/30*self.moment_of_inertia_z*p_l[4]*p_l[3] + 2/15*self.moment_of_inertia_z*p_l[4]*p_l[6] +
+                                            1/30*self.moment_of_inertia_y*p_l[1]*p_l[3] - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[6] - 1/30*self.moment_of_inertia_y*p_l[4]*p_l[3] + 2/15*self.moment_of_inertia_y*p_l[4]*p_l[6])/self.initial_length
+
+        k_l[5, 5] = self.__youngs_modulus*(0.01*self.area*self.initial_length**2*p_l[2]**2 - 0.0133333333333333*self.area*self.initial_length**2*p_l[2]*p_l[5] + 2/75*self.area*self.initial_length**2*p_l[5]**2 + 2/225*self.area*self.initial_length**2*p_l[3]**2 - 1/225*self.area*self.initial_length**2*p_l[3]*p_l[6] + 2/225*self.area*self.initial_length**2*p_l[6]**2 + 2/15 *
+                                            self.area*self.initial_length*p_l[0] + 1/15*self.moment_of_inertia_z*p_l[1]**2 - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_z*p_l[4]**2 + 1/15*self.moment_of_inertia_y*p_l[1]**2 - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_y*p_l[4]**2 + 4.0*self.moment_of_inertia_y)/self.initial_length
+        k_l[6, 5] = self.area*self.__youngs_modulus*self.initial_length*(1/900*p_l[2]*p_l[3] - 1/225*p_l[2]
+                                                                          * p_l[6] - 1/225*p_l[5]*p_l[3] + 4/225*p_l[5]*p_l[6])
+
+        k_l[6, 6] = self.__youngs_modulus*(2/225*self.area*self.initial_length**2*p_l[2]**2 - 1/225*self.area*self.initial_length**2*p_l[2]*p_l[5] + 2/225*self.area*self.initial_length**2*p_l[5]**2 + 0.01*self.area*self.initial_length**2*p_l[3]**2 - 0.0133333333333333*self.area*self.initial_length**2*p_l[3]*p_l[6] + 2/75*self.area*self.initial_length**2*p_l[6]**2 + 2/15 *
+                                            self.area*self.initial_length*p_l[0] + 1/15*self.moment_of_inertia_z*p_l[1]**2 - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_z*p_l[4]**2 + 4.0*self.moment_of_inertia_z + 1/15*self.moment_of_inertia_y*p_l[1]**2 - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4] + 1/15*self.moment_of_inertia_y*p_l[4]**2)/self.initial_length
+
+        for i in range(7):
+            for j in range(i, 7):
+                k_l[i, j] = k_l[j, i]
 
         return k_l
-
+    
     @property
     def auxiliary_vector(self):
-        q_1 = self.current_orientation_node_1 @ self.initial_local_frame @ np.array(
-            [[0, 1, 0]], dtype=float).T
-        q_2 = self.current_orientation_node_2 @ self.initial_local_frame @ np.array(
-            [[0, 1, 0]], dtype=float).T
+        q_1 = self.current_orientation_node_1 @ self.initial_local_frame @ np.array([[0., 1., 0.]]).T
+        q_2 = self.current_orientation_node_2 @ self.initial_local_frame @ np.array([[0., 1., 0.]]).T
         q = (q_1 + q_2) / 2
 
         return q_1, q_2, q
@@ -1210,12 +1426,26 @@ class CorotationalBeamElement3D():
 
         return p_l
 
+    # @property
+    # def local_force(self):
+    #     # Assemble axial force and local end moments into a vector q_l.
+
+    #     return self.local_material_stiffness @ self.local_displacement
+    
     @property
     def local_force(self):
-        # Assemble axial force and local end moments into a vector q_l.
+        p_l = self.local_displacement
+        f_l = np.zeros((7, 1), dtype=float)
+        f_l[0, 0] = self.__youngs_modulus*(1/15*self.area*self.initial_length**2*p_l[2]**2 - 1/30*self.area*self.initial_length**2*p_l[2]*p_l[5] + 1/15*self.area*self.initial_length**2*p_l[5]**2 + 1/15*self.area*self.initial_length**2*p_l[3]**2 - 1/30*self.area*self.initial_length**2*p_l[3]*p_l[6] + 1/15*self.area*self.initial_length**2*p_l[6]**2 + 1.0*self.area*self.initial_length*p_l[0] + 0.5*self.moment_of_inertia_z*p_l[1]**2 - 1.0*self.moment_of_inertia_z*p_l[1]*p_l[4] + 0.5*self.moment_of_inertia_z*p_l[4]**2 + 0.5*self.moment_of_inertia_y*p_l[1]**2 - 1.0*self.moment_of_inertia_y*p_l[1]*p_l[4] + 0.5*self.moment_of_inertia_y*p_l[4]**2)/self.initial_length**2
+        f_l[1, 0] = 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[6]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[2]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[2]*p_l[5]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[5]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[3]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[3]*p_l[6]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[6]**2/self.initial_length + 1.0*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[0]/self.initial_length**2 - 1.0*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[0]/self.initial_length**2 + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[6]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[2]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[2]*p_l[5]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[5]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[3]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[3]*p_l[6]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[6]**2/self.initial_length + 1.0*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[0]/self.initial_length**2 - 1.0*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[0]/self.initial_length**2 + 0.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]**3/self.initial_length**3 - 1.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]**2*p_l[4]/self.initial_length**3 + 1.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]*p_l[4]**2/self.initial_length**3 - 0.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[4]**3/self.initial_length**3 + 1.0*self.__shear_modulus*self.moment_of_inertia_z*p_l[1]/self.initial_length - 1.0*self.__shear_modulus*self.moment_of_inertia_z*p_l[4]/self.initial_length + 1.0*self.__shear_modulus*self.moment_of_inertia_y*p_l[1]/self.initial_length - 1.0*self.__shear_modulus*self.moment_of_inertia_y*p_l[4]/self.initial_length 
+        f_l[2, 0] = 1.0*self.__youngs_modulus*(2/225*self.area*self.initial_length**2*p_l[2]**3 - 1/150*self.area*self.initial_length**2*p_l[2]**2*p_l[5] + 0.01*self.area*self.initial_length**2*p_l[2]*p_l[5]**2 + 2/225*self.area*self.initial_length**2*p_l[2]*p_l[3]**2 - 1/225*self.area*self.initial_length**2*p_l[2]*p_l[3]*p_l[6] + 2/225*self.area*self.initial_length**2*p_l[2]*p_l[6]**2 - 1/450*self.area*self.initial_length**2*p_l[5]**3 - 1/450*self.area*self.initial_length**2*p_l[5]*p_l[3]**2 + 1/900*self.area*self.initial_length**2*p_l[5]*p_l[3]*p_l[6] - 1/450*self.area*self.initial_length**2*p_l[5]*p_l[6]**2 + 2/15*self.area*self.initial_length*p_l[2]*p_l[0] - 1/30*self.area*self.initial_length*p_l[5]*p_l[0] + 1/15*self.moment_of_inertia_z*p_l[1]**2*p_l[2] - 1/60*self.moment_of_inertia_z*p_l[1]**2*p_l[5] - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[2] + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[5] + 1/15*self.moment_of_inertia_z*p_l[4]**2*p_l[2] - 1/60*self.moment_of_inertia_z*p_l[4]**2*p_l[5] + 1/15*self.moment_of_inertia_y*p_l[1]**2*p_l[2] - 1/60*self.moment_of_inertia_y*p_l[1]**2*p_l[5] - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[2] + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[5] + 1/15*self.moment_of_inertia_y*p_l[4]**2*p_l[2] - 1/60*self.moment_of_inertia_y*p_l[4]**2*p_l[5] + 4.0*self.moment_of_inertia_y*p_l[2] + 2.0*self.moment_of_inertia_y*p_l[5])/self.initial_length 
+        f_l[3, 0] = 1.0*self.__youngs_modulus*(2/225*self.area*self.initial_length**2*p_l[2]**2*p_l[3] - 1/450*self.area*self.initial_length**2*p_l[2]**2*p_l[6] - 1/225*self.area*self.initial_length**2*p_l[2]*p_l[5]*p_l[3] + 1/900*self.area*self.initial_length**2*p_l[2]*p_l[5]*p_l[6] + 2/225*self.area*self.initial_length**2*p_l[5]**2*p_l[3] - 1/450*self.area*self.initial_length**2*p_l[5]**2*p_l[6] + 2/225*self.area*self.initial_length**2*p_l[3]**3 - 1/150*self.area*self.initial_length**2*p_l[3]**2*p_l[6] + 0.01*self.area*self.initial_length**2*p_l[3]*p_l[6]**2 - 1/450*self.area*self.initial_length**2*p_l[6]**3 + 2/15*self.area*self.initial_length*p_l[3]*p_l[0] - 1/30*self.area*self.initial_length*p_l[6]*p_l[0] + 1/15*self.moment_of_inertia_z*p_l[1]**2*p_l[3] - 1/60*self.moment_of_inertia_z*p_l[1]**2*p_l[6] - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[3] + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[6] + 1/15*self.moment_of_inertia_z*p_l[4]**2*p_l[3] - 1/60*self.moment_of_inertia_z*p_l[4]**2*p_l[6] + 4.0*self.moment_of_inertia_z*p_l[3] + 2.0*self.moment_of_inertia_z*p_l[6] + 1/15*self.moment_of_inertia_y*p_l[1]**2*p_l[3] - 1/60*self.moment_of_inertia_y*p_l[1]**2*p_l[6] - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[3] + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[6] + 1/15*self.moment_of_inertia_y*p_l[4]**2*p_l[3] - 1/60*self.moment_of_inertia_y*p_l[4]**2*p_l[6])/self.initial_length
+        f_l[4, 0] = -1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[2]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[2]*p_l[5]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[5]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[3]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[3]*p_l[6]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[6]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[6]**2/self.initial_length - 1.0*self.__youngs_modulus*self.moment_of_inertia_z*p_l[1]*p_l[0]/self.initial_length**2 + 1.0*self.__youngs_modulus*self.moment_of_inertia_z*p_l[4]*p_l[0]/self.initial_length**2 - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[2]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[2]*p_l[5]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[5]**2/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[3]**2/self.initial_length + 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[3]*p_l[6]/self.initial_length - 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[6]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[2]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[2]*p_l[5]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[5]**2/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[3]**2/self.initial_length - 1/30*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[3]*p_l[6]/self.initial_length + 1/15*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[6]**2/self.initial_length - 1.0*self.__youngs_modulus*self.moment_of_inertia_y*p_l[1]*p_l[0]/self.initial_length**2 + 1.0*self.__youngs_modulus*self.moment_of_inertia_y*p_l[4]*p_l[0]/self.initial_length**2 - 0.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]**3/self.initial_length**3 + 1.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]**2*p_l[4]/self.initial_length**3 - 1.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[1]*p_l[4]**2/self.initial_length**3 + 0.5*self.__youngs_modulus*self.fourth_order_polar_moment_of_inertia*p_l[4]**3/self.initial_length**3 - 1.0*self.__shear_modulus*self.moment_of_inertia_z*p_l[1]/self.initial_length + 1.0*self.__shear_modulus*self.moment_of_inertia_z*p_l[4]/self.initial_length - 1.0*self.__shear_modulus*self.moment_of_inertia_y*p_l[1]/self.initial_length + 1.0*self.__shear_modulus*self.moment_of_inertia_y*p_l[4]/self.initial_length
+        f_l[5, 0] = self.__youngs_modulus*(-1/450*self.area*self.initial_length**2*p_l[2]**3 + 0.01*self.area*self.initial_length**2*p_l[2]**2*p_l[5] - 1/150*self.area*self.initial_length**2*p_l[2]*p_l[5]**2 - 1/450*self.area*self.initial_length**2*p_l[2]*p_l[3]**2 + 1/900*self.area*self.initial_length**2*p_l[2]*p_l[3]*p_l[6] - 1/450*self.area*self.initial_length**2*p_l[2]*p_l[6]**2 + 2/225*self.area*self.initial_length**2*p_l[5]**3 + 2/225*self.area*self.initial_length**2*p_l[5]*p_l[3]**2 - 1/225*self.area*self.initial_length**2*p_l[5]*p_l[3]*p_l[6] + 2/225*self.area*self.initial_length**2*p_l[5]*p_l[6]**2 - 1/30*self.area*self.initial_length*p_l[2]*p_l[0] + 2/15*self.area*self.initial_length*p_l[5]*p_l[0] - 1/60*self.moment_of_inertia_z*p_l[1]**2*p_l[2] + 1/15*self.moment_of_inertia_z*p_l[1]**2*p_l[5] + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[2] - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[5] - 1/60*self.moment_of_inertia_z*p_l[4]**2*p_l[2] + 1/15*self.moment_of_inertia_z*p_l[4]**2*p_l[5] - 1/60*self.moment_of_inertia_y*p_l[1]**2*p_l[2] + 1/15*self.moment_of_inertia_y*p_l[1]**2*p_l[5] + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[2] - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[5] - 1/60*self.moment_of_inertia_y*p_l[4]**2*p_l[2] + 1/15*self.moment_of_inertia_y*p_l[4]**2*p_l[5] + 2.0*self.moment_of_inertia_y*p_l[2] + 4.0*self.moment_of_inertia_y*p_l[5])/self.initial_length
+        f_l[6, 0] = self.__youngs_modulus*(-1/450*self.area*self.initial_length**2*p_l[2]**2*p_l[3] + 2/225*self.area*self.initial_length**2*p_l[2]**2*p_l[6] + 1/900*self.area*self.initial_length**2*p_l[2]*p_l[5]*p_l[3] - 1/225*self.area*self.initial_length**2*p_l[2]*p_l[5]*p_l[6] - 1/450*self.area*self.initial_length**2*p_l[5]**2*p_l[3] + 2/225*self.area*self.initial_length**2*p_l[5]**2*p_l[6] - 1/450*self.area*self.initial_length**2*p_l[3]**3 + 0.01*self.area*self.initial_length**2*p_l[3]**2*p_l[6] - 1/150*self.area*self.initial_length**2*p_l[3]*p_l[6]**2 + 2/225*self.area*self.initial_length**2*p_l[6]**3 - 1/30*self.area*self.initial_length*p_l[3]*p_l[0] + 2/15*self.area*self.initial_length*p_l[6]*p_l[0] - 1/60*self.moment_of_inertia_z*p_l[1]**2*p_l[3] + 1/15*self.moment_of_inertia_z*p_l[1]**2*p_l[6] + 1/30*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[3] - 2/15*self.moment_of_inertia_z*p_l[1]*p_l[4]*p_l[6] - 1/60*self.moment_of_inertia_z*p_l[4]**2*p_l[3] + 1/15*self.moment_of_inertia_z*p_l[4]**2*p_l[6] + 2.0*self.moment_of_inertia_z*p_l[3] + 4.0*self.moment_of_inertia_z*p_l[6] - 1/60*self.moment_of_inertia_y*p_l[1]**2*p_l[3] + 1/15*self.moment_of_inertia_y*p_l[1]**2*p_l[6] + 1/30*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[3] - 2/15*self.moment_of_inertia_y*p_l[1]*p_l[4]*p_l[6] - 1/60*self.moment_of_inertia_y*p_l[4]**2*p_l[3] + 1/15*self.moment_of_inertia_y*p_l[4]**2*p_l[6])/self.initial_length
 
-        return self.local_material_stiffness @ self.local_displacement
-
+        return f_l
+        
     @property
     def Ba_matrix(self):
         p_l = self.local_displacement
@@ -1257,10 +1487,8 @@ class CorotationalBeamElement3D():
     @property
     def Kh_matrix(self):
         K_h = np.zeros((7, 7), dtype=float)
-        K_h1 = self.Khi_matrix(1)
-        K_h2 = self.Khi_matrix(2)
-        K_h[1: 4, 1: 4] = K_h1
-        K_h[4: 7, 4: 7] = K_h2
+        K_h[1: 4, 1: 4] = self.Khi_matrix(1)
+        K_h[4: 7, 4: 7] = self.Khi_matrix(2)
 
         return K_h
 
@@ -1312,9 +1540,7 @@ class CorotationalBeamElement3D():
 
         r_1 = (self.current_coordinate_node_2 -
                self.current_coordinate_node_1) / self.current_length
-        r = np.c_[-r_1.T, np.array([[0, 0, 0]], dtype=float),
-                  r_1.T, np.array([[0, 0, 0]], dtype=float)]
-
+        r = np.c_[-r_1.T, np.array([[0., 0., 0.]]), r_1.T, np.array([[0., 0., 0.]])]
         return r
 
     @property
@@ -1356,28 +1582,31 @@ class CorotationalBeamElement3D():
 
     @property
     def a_vector(self):
-
+   
+        f_a = self.local_force_a
         _, _, q = self.auxiliary_vector
         q1 = float((self.current_local_frame.T @ q)[0, 0])
         q2 = float((self.current_local_frame.T @ q)[1, 0])
         eta = q1 / q2
 
         a = np.zeros((3, 1), dtype=float)
-        a[1] = eta/self.current_length * (self.local_force_a[1] + self.local_force_a[4]) - \
+        a[1] = eta/self.current_length * (f_a[1] + f_a[4]) - \
             1/self.current_length * \
-            (self.local_force_a[2] + self.local_force_a[5])
+            (f_a[2] + f_a[5])
         a[2] = 1/self.current_length * \
-            (self.local_force_a[3] + self.local_force_a[6])
+            (f_a[3] + f_a[6])
 
         return a
 
     @property
     def Q_matrix(self):
-
-        n_1 = (self.P_matrix.T @ self.local_force_a[1: 7])[0: 3]
-        m_1 = (self.P_matrix.T @ self.local_force_a[1: 7])[3: 6]
-        n_2 = (self.P_matrix.T @ self.local_force_a[1: 7])[6: 9]
-        m_2 = (self.P_matrix.T @ self.local_force_a[1: 7])[9: 12]
+      
+        f_a = self.local_force_a
+        
+        n_1 = (self.P_matrix.T @ f_a[1: 7])[0: 3]
+        m_1 = (self.P_matrix.T @ f_a[1: 7])[3: 6]
+        n_2 = (self.P_matrix.T @ f_a[1: 7])[6: 9]
+        m_2 = (self.P_matrix.T @ f_a[1: 7])[9: 12]
 
         n_1tilde = util.getSkewSymmetric(n_1)
         m_1tilde = util.getSkewSymmetric(m_1)
@@ -1414,28 +1643,17 @@ class System():
         self._number_of_elements = None
         self._number_of_nodes = None
         self._number_of_dofs = None
-        
-        self._number_of_increments = None
-        
-        self._max_load = None
-        self._max_displacement = None
-        self._arc_length = None
 
         self._dirichlet_boundary_condition = []
         self._load_boundary_condition = None
         self._load_increment_vector = None
 
-        self._tolerance = None
-        self._max_iteration_steps = None
-        self._solver = None
-        
         self._state_variable = None
         self._control_parameter = None
-        
+
         self._interesting_dof = None
         self._state_variable_plot = [0.]
         self._control_parameter_plot = [0.]
-        
 
     @property
     def dimension(self):
@@ -1474,175 +1692,83 @@ class System():
     def analysis(self):
         return self.__analysis
 
-    @analysis.setter
+    @ analysis.setter
     def analysis(self, val):
-        if not ((val == "elastic") or
-                (val == "perfect plasticity") or
-                (val == "linear hardening") or
-                (val == "quadratic hardening") or
-                (val == "exponential hardening") or
-                (val == "ramberg-osgood hardening")):
-            print("These six models are implemented here: 1. elastic; 2. perfect plasticity; 3. linear hardening; 4. quadratic hardening; 5. exponential hardening; 6. ramberg-osgood hardening.")
-            raise ValueError("Wrong constitutive law!")
-        else:
-            self.__analysis = val
+        self.__analysis = val
 
-    @property
-    def number_of_increments(self):
-        return self._number_of_increments
-
-    @number_of_increments.setter
-    def number_of_increments(self, val):
-        if not isinstance(val, int):
-            raise TypeError("Number of load increments must be a integer!")
-        elif val <= 0:
-            raise ValueError("Number of load increments must be positive!")
-        else:
-            self._number_of_increments = val
-
-    @property
-    def max_load(self):
-        return self._max_load
-
-    @max_load.setter
-    def max_load(self, val):
-        if not isinstance(val, float):
-            raise TypeError("The upper bound of load must be a float!")
-        elif val <= 0:
-            raise ValueError("The upper bound of load must be positive!")
-        else:
-            self._max_load = val
-
-    @property
-    def max_displacement(self):
-        return self._max_displacement
-
-    @max_displacement.setter
-    def max_displacement(self, val):
-        if not isinstance(val, float):
-            raise TypeError("The upper bound of displacement must be a float!")
-        elif val <= 0:
-            raise ValueError(
-                "The upper bound of displacement must be positive!")
-        else:
-            self._max_displacement = val
-
-    @property
-    def arc_length(self):
-        return self._arc_length
-
-    @arc_length.setter
-    def arc_length(self, val):
-        if not isinstance(val, float):
-            raise TypeError("The arc length must be a float!")
-        elif val <= 0:
-            raise ValueError(
-                "The arc length must be positive!")
-        else:
-            self._arc_length = val
-
-
-    @property
-    def tolerance(self):
-        return self._tolerance
-
-    @tolerance.setter
-    def tolerance(self, val):
-        if not isinstance(val, float):
-            raise TypeError("The tolerance must be a float number!")
-        elif val <= 0:
-            raise ValueError("The tolerance must be positive!")
-        else:
-            self._tolerance = val
-
-    @property
-    def max_iteration_steps(self):
-        return self._max_iteration_steps
-
-    @max_iteration_steps.setter
-    def max_iteration_steps(self, val):
-        if not isinstance(val, int):
-            raise TypeError("The maximum iteration steps must be a integer!")
-        elif val <= 0:
-            raise ValueError("The maximum iteration steps must be positive!")
-        else:
-            self._max_iteration_steps = val
-
-    @property
-    def solver(self):
-        return self._solver
-
-    @solver.setter
-    def solver(self, val):
-        if val != "load-control" and val != "displacement-control" and val != "arc-length-control":
-            raise ValueError("Invalid solver!")
-        else:
-            self._solver = val
-
-    def initialize_structure(self, *parameters):
+    def initialize_structure(self, youngs_modulus, width, height, shear_modulus=1.0):
         structure = []
         array_nodes, array_elements, self._number_of_nodes, self._number_of_elements = util.load_mesh_file(
             self.geometry_name)
         if self.__dimension == 2:
             self._number_of_dofs = 3 * self._number_of_nodes
-            for iele, ele in enumerate(array_elements.T):
+        else:
+            self._number_of_dofs = 6 * self._number_of_nodes
+
+        for iele, ele in enumerate(array_elements.T):
+            if self.__dimension == 2:
                 co_ele = CorotationalBeamElement2D()
                 co_ele.initial_coordinate_node_1 = array_nodes[0: 2, ele[0] - 1].reshape(
                     2, 1)
                 co_ele.initial_coordinate_node_2 = array_nodes[0: 2, ele[1] - 1].reshape(
                     2, 1)
-
-                co_ele.youngs_modulus = parameters[0]
-                co_ele.width = parameters[1]
-                co_ele.height = parameters[2]
-
-                co_ele.analysis = self.__analysis
-                co_ele.element_freedom_table = iele
-
-                structure.append(co_ele)
-        else:
-            self._number_of_dofs = 6 * self._number_of_nodes
-            for iele, ele in enumerate(array_elements.T):
+            else:
                 co_ele = CorotationalBeamElement3D()
                 co_ele.initial_coordinate_node_1 = array_nodes[:, ele[0] - 1].reshape(
                     3, 1)
                 co_ele.initial_coordinate_node_2 = array_nodes[:, ele[1] - 1].reshape(
                     3, 1)
 
-                co_ele.youngs_modulus = parameters[0]
-                co_ele.area = parameters[1]
-                co_ele.moment_of_inertia_y = parameters[2]
-                co_ele.moment_of_inertia_z = parameters[3]
-                co_ele.polar_moment_of_inertia = parameters[4]
-                co_ele.shear_modulus = parameters[5]
+            co_ele.youngs_modulus = youngs_modulus
+            co_ele.shear_modulus = shear_modulus
+            co_ele.width = width
+            co_ele.height = height
 
-                co_ele.analysis = self.__analysis
-                co_ele.element_freedom_table = iele
+            co_ele.element_freedom_table = iele
 
-                structure.append(co_ele)
-        
+            structure.append(co_ele)
+
         self._state_variable = np.zeros((self._number_of_dofs, 1), dtype=float)
         self._control_parameter = 0.
         self._structure = structure
 
-    def initialize_with_plasticity(self, *parameters):
-        for ele in self._structure:
-            if self.__analysis == "perfect plasticity":
-                ele.yield_stress = parameters[0]
-            elif self.__analysis == "linear hardening":
-                ele.yield_stress = parameters[0]
-                ele.plastic_modulus = parameters[1]
-            elif self.__analysis == "quadratic hardening":
-                ele.yield_stress = parameters[0]
-                ele.quadratic_coefficient = parameters[1]
-            elif self.__analysis == "exponential hardening":
-                ele.yield_stress = parameters[0]
-                ele.saturation_stress = parameters[1]
-                ele.exponent = parameters[2]
-            elif self.__analysis == "ramberg-osgood hardening":
-                ele.yield_stress = parameters[0]
-                ele.modified_modulus = parameters[1]
-                ele.exponent = parameters[2]
+    def initialize_with_plasticity(self, analysis, yield_stress, plastic_modulus=None,
+                                   quadratic_coefficient=None, saturation_stress=None,
+                                   modified_modulus=None, exponent=None):
+
+        if analysis == "perfect plasticity":
+            self.analysis = analysis
+            for ele in self._structure:
+                ele.analysis = analysis
+                ele.yield_stress = yield_stress
+        elif analysis == "linear hardening":
+            self.analysis = analysis
+            for ele in self._structure:
+                ele.analysis = analysis
+                ele.yield_stress = yield_stress
+                ele.plastic_modulus = plastic_modulus
+        elif analysis == "quadratic hardening":
+            self.analysis = analysis
+            for ele in self._structure:
+                ele.analysis = analysis
+                ele.yield_stress = yield_stress
+                ele.quadratic_coefficient = quadratic_coefficient
+        elif analysis == "exponential hardening":
+            self.analysis = analysis
+            for ele in self._structure:
+                ele.analysis = analysis
+                ele.yield_stress = yield_stress
+                ele.saturation_stress = saturation_stress
+                ele.exponent = exponent
+        elif analysis == "ramberg-osgood hardening":
+            self.analysis = analysis
+            for ele in self._structure:
+                ele.analysis = analysis
+                ele.yield_stress = yield_stress
+                ele.modified_modulus = modified_modulus
+                ele.exponent = exponent
+        else:
+            raise ValueError("Please input an available plastic model!")
 
     def add_dirichlet_bc(self, node, dof):
         if self.dimension == 2:
@@ -1673,7 +1799,7 @@ class System():
                 self._dirichlet_boundary_condition.append(6 * node + 4)
                 self._dirichlet_boundary_condition.append(6 * node + 5)
 
-    def add_load_bc(self, node, dof, direction):
+    def add_load_bc(self, node, dof):
         if self.dimension == 2:
             if dof == "x":
                 self._load_boundary_condition = 3 * node
@@ -1691,12 +1817,8 @@ class System():
 
         self._load_increment_vector = np.zeros(
             (self._number_of_dofs, 1), dtype=float)
-        if direction == "+":
-            self._load_increment_vector[self._load_boundary_condition] = 1
-        elif direction == "-":
-            self._load_increment_vector[self._load_boundary_condition] = -1
-        else:
-            raise ValueError("Please assign the correct load direction!")
+        self._load_increment_vector[self._load_boundary_condition] = 1
+        self._interesting_dof = self._load_boundary_condition
 
     @property
     def master_stiffness_matrix(self):
@@ -1711,23 +1833,38 @@ class System():
             Returns:
                 K: the system stiffness matrix, [ndof x ndof]
         """
-        K = np.zeros((self._number_of_dofs, self._number_of_dofs), dtype=float)
+        # K = np.zeros((self._number_of_dofs, self._number_of_dofs), dtype=float)
 
-        if self.__dimension == 2:
-            dof_per_ele = 6
-        else:
-            dof_per_ele = 12
+        # if self.__dimension == 2:
+        #     dof_per_ele = 6
+        # else:
+        #     dof_per_ele = 12
 
+        # for ele in self._structure:
+        #     eft = ele.element_freedom_table
+        #     esm = ele.global_stiffness_matrix
+        #     for idof in range(dof_per_ele):
+        #         for jdof in range(idof, dof_per_ele):
+        #             K[eft[idof], eft[jdof]
+        #               ] += esm[idof, jdof]
+        #             K[eft[jdof], eft[idof]
+        #               ] = K[eft[idof], eft[jdof]]
+        # return K
+        
+        val = np.array([], dtype=float)
+        row = np.array([], dtype=int)
+        col = np.array([], dtype=int)
+        
         for ele in self._structure:
-            eft = ele.element_freedom_table
-            esm = ele.global_stiffness_matrix
-            for idof in range(dof_per_ele):
-                for jdof in range(idof, dof_per_ele):
-                    K[eft[idof], eft[jdof]
-                      ] += esm[idof, jdof]
-                    K[eft[jdof], eft[idof]
-                      ] = K[eft[idof], eft[jdof]]
-        return K
+            el_dofs = ele.element_freedom_table
+            row = np.append(row, np.repeat(el_dofs,len(el_dofs)))
+
+            for i in range(len(el_dofs)):
+                col=np.append(col, el_dofs)        
+
+            val = np.append(val, ele.global_stiffness_matrix)
+            
+        return coo_matrix((val, (row, col)), shape = (self._number_of_dofs, self._number_of_dofs))        
 
     @property
     def modified_master_stiffness_matrix(self):
@@ -1741,14 +1878,14 @@ class System():
             Returns:
                 K_s: the modified system stiffness matrix, [ndof x ndof]
         """
-        K_s = np.copy(self.master_stiffness_matrix)
-
+        K_s = self.master_stiffness_matrix.copy()
+        K_s = csr_matrix(K_s)
         for idof in self._dirichlet_boundary_condition:
             for jentry in range(self._number_of_dofs):
                 K_s[idof, jentry] = 0.
                 K_s[jentry, idof] = 0.
                 K_s[idof, idof] = 1.
-                
+
         return K_s
 
     @property
@@ -1767,10 +1904,12 @@ class System():
         """
         F_int = np.zeros((self._number_of_dofs, 1), dtype=float)
         for ele in self._structure:
-            for idof, iEFT in enumerate(ele.element_freedom_table):
-                F_int[iEFT] += ele.global_force[idof]
+            eft = ele.element_freedom_table
+            ef = ele.global_force
+            for idof, iEFT in enumerate(eft):
+                F_int[iEFT] += ef[idof]
         return F_int
-    
+
     @property
     def residual(self):
         return self.internal_force_vector - self._control_parameter * self._load_increment_vector
@@ -1787,447 +1926,402 @@ class System():
                 r: the MODIFIED residual of the system, [ndof x 1]
         """
         modified_residual = np.copy(self.residual)
-        
+
         for idof in self._dirichlet_boundary_condition:
             modified_residual[idof] = 0.
-            
+
         return modified_residual
-    
+
     @property
     def residual_norm(self):
         return np.linalg.norm(self.modified_residual)
-    
-    def update_member_data(self, u, lam, deltau):
-        """ Update nodal displacements, local forces and storage vector.
 
-            Args:
-                u: global displacement vector, [ndof x 1]
-                beam: the list of beam elements
-                nele: the number of elements
-                q_l: the storage vector of local forces, [3 * nele x 1]
+    def update_member_data_2d(self, u, lam):
+        for iele, ele in enumerate(self._structure):
+            ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
+            if ele.analysis == "perfect plasticity":
+                ele.perform_perfect_plasticity()
+            elif ele.analysis == "linear hardening":
+                ele.perform_linear_hardening()
+            elif ele.analysis == "quadratic hardening":
+                ele.perform_quadratic_hardening()
+            elif ele.analysis == "exponential hardening":
+                ele.perform_exponential_hardening()
+            elif ele.analysis == "ramberg-osgood hardening":
+                ele.perform_ramberg_osgood_hardening()
 
-            Returns:
-                beam: the list of beam elements, DATA UPDATED
-                q_l: the UPDATED storage vector of local forces, [3 * nele x 1]
-        """
-        if self.__dimension == 2:
-            for iele, ele in enumerate(self._structure):
-                ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
-                if ele.analysis == "perfect plasticity":
-                    ele.perform_perfect_plasticity()
-                elif ele.analysis == "linear hardening":
-                    ele.perform_linear_hardening()
-                elif ele.analysis == "quadratic hardening":
-                    ele.perform_quadratic_hardening()
-                elif ele.analysis == "exponential hardening":
-                    ele.perform_exponential_hardening()
-                elif ele.analysis == "ramberg-osgood hardening":
-                    ele.perform_ramberg_osgood_hardening()
-                    
-            self._state_variable = u
-            self._control_parameter = lam
-            
-        else:
-            for iele, ele in enumerate(self._structure):
-                ele.incremental_global_displacement = u[6 *
-                                                        iele: 6 * iele + 12]
-                ele.current_orientation_node_1 = expm(util.getSkewSymmetric(
-                    deltau[6 * iele + 3: 6 * iele + 6])) @ ele.current_orientation_node_1
-                ele.current_orientation_node_2 = expm(util.getSkewSymmetric(
-                    deltau[6 * iele + 9: 6 * iele + 12])) @ ele.current_orientation_node_2
+        self._state_variable = u
+        self._control_parameter = lam
 
-    def update_member_data_iteration(self, u, deltau, plastic_strain, internal_hardening_variable):
-        """ Update nodal displacements, local forces and storage vector.
+    def update_member_data_2d_iteration(self, u, lam, *args):
+        for iele, ele in enumerate(self._structure):
+            ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
+            if ele.analysis == "perfect plasticity":
+                ele.plastic_strain = args[0][iele]
+                ele.internal_hardening_variable = args[1][iele]
+                ele.perform_perfect_plasticity()
+            elif ele.analysis == "linear hardening":
+                ele.plastic_strain = args[0][iele]
+                ele.internal_hardening_variable = args[1][iele]
+                ele.perform_linear_hardening()
+            elif ele.analysis == "quadratic hardening":
+                ele.plastic_strain = args[0][iele]
+                ele.internal_hardening_variable = args[1][iele]
+                ele.perform_quadratic_hardening()
+            elif ele.analysis == "exponential hardening":
+                ele.plastic_strain = args[0][iele]
+                ele.internal_hardening_variable = args[1][iele]
+                ele.perform_exponential_hardening()
+            elif ele.analysis == "ramberg-osgood hardening":
+                ele.plastic_strain = args[0][iele]
+                ele.internal_hardening_variable = args[1][iele]
+                ele.perform_ramberg_osgood_hardening()
 
-            Args:
-                u: global displacement vector, [ndof x 1]
-                beam: the list of beam elements
-                nele: the number of elements
-                q_l: the storage vector of local forces, [3 * nele x 1]
+        self._state_variable = u
+        self._control_parameter = lam
 
-            Returns:
-                beam: the list of beam elements, DATA UPDATED
-                q_l: the UPDATED storage vector of local forces, [3 * nele x 1]
-        """
-        if self.__dimension == 2:
-            for iele, ele in enumerate(self._structure):
-                ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
-                # ele.__plastic_strain = plastic_strain[iele]
-                # ele.__internal_hardening_variable = internal_hardening_variable[iele]
-                # ele.perform_perfect_plasticity()
-        else:
-            for iele, ele in enumerate(self._structure):
-                ele.incremental_global_displacement = u[6 *
-                                                        iele: 6 * iele + 12]
-                ele.current_orientation_node_1 = expm(util.getSkewSymmetric(
-                    deltau[6 * iele + 3: 6 * iele + 6])) @ ele.current_orientation_node_1
-                ele.current_orientation_node_2 = expm(util.getSkewSymmetric(
-                    deltau[6 * iele + 9: 6 * iele + 12])) @ ele.current_orientation_node_2
+    def update_member_data_3d(self, u, lam, deltau):
+        for iele, ele in enumerate(self._structure):
+            ele.incremental_global_displacement = u[6 * iele: 6 * iele + 12]
+            ele.current_orientation_node_1 = expm(util.getSkewSymmetric(
+                deltau[6 * iele + 3: 6 * iele + 6])) @ ele.current_orientation_node_1
+            ele.current_orientation_node_2 = expm(util.getSkewSymmetric(
+                deltau[6 * iele + 9: 6 * iele + 12])) @ ele.current_orientation_node_2
 
+        self._state_variable = u
+        self._control_parameter = lam
 
+    def load_control(self, number_of_increments, tolerance, max_iteration_steps, load):
+        for n in range(number_of_increments):
+            dF = load / number_of_increments * self._load_increment_vector
 
-    def load_control(self):
-        for n in range(self.number_of_load_increments):
-            dF = self.max_load / self.number_of_load_increments * self._load_increment_vector
+            Deltau = spsolve(self.modified_master_stiffness_matrix, dF).reshape(self._number_of_dofs, 1)
+            Deltalam = load / number_of_increments
 
-            Deltau = np.linalg.solve(self.modified_master_stiffness_matrix, dF)
-            Deltalam = self.max_load / self.number_of_load_increments
-            
             u_pre = self._state_variable + Deltau
             lam_pre = self._control_parameter + Deltalam
 
             # update member data
-            self.update_member_data(u_pre, lam_pre, Deltau)
+            if self.__dimension == 2:
+                self.update_member_data_2d(u_pre, lam_pre)
+            else:
+                self.update_member_data_3d(u_pre, lam_pre, Deltau)
 
+            u_temp = u_pre
             # initialize iteration counter
             kiter = 0
 
-            deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
-            
-            # plastic_strain = []
-            # internal_hardening_variable = []
-            # for ele in self._structure:
-            #     plastic_strain.append(ele.__plastic_strain)
-            #     internal_hardening_variable.append(
-            #         ele.__internal_hardening_variable)
+            # deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
+
+            if self.__analysis != "elastic":
+                plastic_strain = []
+                internal_hardening_variable = []
+                for ele in self._structure:
+                    plastic_strain.append(ele.plastic_strain)
+                    internal_hardening_variable.append(
+                        ele.internal_hardening_variable)
 
             # iterate, until good result or so many iteration steps
-            while(self.residual_norm > self.tolerance and kiter < self.max_iteration_steps):
-                deltau -= np.linalg.solve(self.modified_master_stiffness_matrix, self.modified_residual)
-                self.update_member_data(u_pre + deltau, lam_pre, deltau)
+            while(self.residual_norm > tolerance and kiter < max_iteration_steps):
+                deltau = -spsolve(
+                    self.modified_master_stiffness_matrix, self.modified_residual).reshape(self._number_of_dofs, 1).reshape(self._number_of_dofs, 1)
+                u_temp += deltau
+                
+                if self.__analysis != "elastic":
+                    self.update_member_data_2d_iteration(
+                        u_pre + deltau, lam_pre, plastic_strain, internal_hardening_variable)
+                else:
+                    if self.__dimension == 2:
+                        self.update_member_data_2d(u_temp, lam_pre)
+                    else:
+                        self.update_member_data_3d(u_temp, lam_pre, deltau)
 
                 # update iterations counter
                 kiter += 1
-                if(kiter == self.max_iteration_steps):
+                print("Iteration step: " + str(kiter))
+                print("residual norm:" + str(self.residual_norm))
+                if(kiter == max_iteration_steps):
                     raise RuntimeError(
                         'Newton-Raphson iterations did not converge!')
-
-            self._state_variable_plot.append(float(self._state_variable[self._interesting_dof]))
+                
+            self._state_variable_plot.append(
+                float(self._state_variable[self._interesting_dof]))
             self._control_parameter_plot.append(self._control_parameter)
-    
-    def displacement_control(self):
-        for n in range(self.number_of_load_increments):
-            u_hat = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
-            
-            Deltalam = float(self._max_displacement / (self.number_of_load_increments * u_hat[self._load_boundary_condition]))
-            
+            print("Incrementation step: " + str(n + 1))
+                 
+    def displacement_control(self, number_of_increments, tolerance, max_iteration_steps, displacement):
+        for n in range(number_of_increments):
+            u_hat = spsolve(
+                self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
+
+            Deltalam = float(
+                displacement / (number_of_increments * u_hat[self._load_boundary_condition]))
+
             dF = Deltalam * self._load_increment_vector
 
-            Deltau = np.linalg.solve(self.modified_master_stiffness_matrix, dF)
-            
-            u_pre = self._state_variable + Deltau
-            lam_pre = self._control_parameter + Deltalam
-
-            # update member data
-            self.update_member_data(u_pre, lam_pre, Deltau)
-
-            # initialize iteration counter
-            kiter = 0
-
-            deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
-            deltalam = 0.
-            
-            # plastic_strain = []
-            # internal_hardening_variable = []
-            # for ele in self._structure:
-            #     plastic_strain.append(ele.__plastic_strain)
-            #     internal_hardening_variable.append(
-            #         ele.__internal_hardening_variable)
-
-            # iterate, until good result or so many iteration steps
-            while(self.residual_norm > self.tolerance and kiter < self.max_iteration_steps):
-                u_invhat = np.linalg.solve(self.modified_master_stiffness_matrix, self.modified_residual)
-                u_hat = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
-                
-                deltalam += float(u_invhat[self._load_boundary_condition] / u_hat[self._load_boundary_condition])
-                deltau -= np.linalg.solve(self.modified_master_stiffness_matrix, self.modified_residual - float(u_invhat[self._load_boundary_condition] / u_hat[self._load_boundary_condition]) * self._load_increment_vector)
-                self.update_member_data(u_pre + deltau, lam_pre + deltalam, deltau)
-
-                # update iterations counter
-                kiter += 1
-                if(kiter == self.max_iteration_steps):
-                    raise RuntimeError(
-                        'Newton-Raphson iterations did not converge!')
-
-            self._state_variable_plot.append(float(self._state_variable[self._interesting_dof]))
-            self._control_parameter_plot.append(self._control_parameter)
-    
-    def arc_length_control(self):
-        Deltau_prev = np.ones((self._number_of_dofs, 1), dtype=float)
-        for n in range(self.number_of_load_increments):
-
-            deltaubar = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
-            Deltalam = np.sign(float(Deltau_prev.T @ deltaubar)) * self._arc_length / np.sqrt(float(deltaubar.T @ deltaubar))
-            
-            Delta_increment = Deltalam * self._load_increment_vector
-            Deltau = np.linalg.solve(self.modified_master_stiffness_matrix, Delta_increment)
+            Deltau = spsolve(self.modified_master_stiffness_matrix, dF).reshape(self._number_of_dofs, 1)
 
             u_pre = self._state_variable + Deltau
             lam_pre = self._control_parameter + Deltalam
-            
-            # update member data
-            self.update_member_data(u_pre, lam_pre, Deltau)
-            
-            # initialize iteration counter
-            kiter = 0
-            
-            deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
-            deltalam = 0.
-            
-            # iterate, until good result or so many iteration steps
-            while(self.residual_norm > self.tolerance and kiter < self.max_iteration_steps):
-                
-                deltau_star = np.linalg.solve(self.modified_master_stiffness_matrix, -self.modified_residual)
-                deltau_bar = np.linalg.solve(self.modified_master_stiffness_matrix, self._load_increment_vector)
-                Deltau += deltau
-                
-                a = float(deltau_bar.T @ deltau_bar)
-                b = float(2 * (Deltau + deltau_star).T @ deltau_bar)
-                c = float((Deltau + deltau_star).T @ (Deltau + deltau_star)) - self._arc_length ** 2
-                
-                [deltalam2_hat, deltalam1_hat] = np.roots([a, b, c])
-
-                dotprod1 = float((Deltau + deltau_star + deltalam1_hat * deltau_bar).T @ Deltau)
-                dotprod2 = float((Deltau + deltau_star + deltalam2_hat * deltau_bar).T @ Deltau)
-                
-                if dotprod1 >= dotprod2:
-                    deltalam += deltalam1_hat
-                    deltau += (deltau_star + deltalam1_hat * deltau_bar)
-                else:
-                    deltalam += deltalam2_hat
-                    deltau += (deltau_star + deltalam2_hat * deltau_bar)
-                    
-                # update member data
-                self.update_member_data(u_pre + deltau, lam_pre + deltalam, deltau)
-
-                # update iterations counter
-                kiter += 1
-                if(kiter == self.max_iteration_steps):
-                    raise RuntimeError(
-                        'Newton-Raphson iterations did not converge!')
-
-            """
-            ------------------------------------------------------------------
-            3. Update variables to their final value for the current increment
-            ------------------------------------------------------------------
-            """
-            # self._state_variable += deltau
-            Deltau_prev = Deltau + deltau
-            # self._control_parameter += deltalam
-
-            self._state_variable_plot.append(float(self._state_variable[self._interesting_dof]))
-            self._control_parameter_plot.append(self._control_parameter)
-    
-    def solve_the_system(self):
-        if self._solver == "load-control":
-            self.load_control()
-        elif self._solver == "displacement-control":
-            self.displacement_control()
-        elif self._solver == "arc-length-control":
-            self.arc_length_control()
-    
-    def solve_the_system_(self):
-        lam = 0.
-        u = np.zeros((self._number_of_dofs, 1), dtype=float)
-        U = np.array([0.], dtype=float)
-        LAM = np.array([0.], dtype=float)
-
-        for n in range(self.number_of_load_increments):
-
-            # set the predictor by equal load increments
-            K = self.master_stiffness_matrix()
-            K_s = self.modified_master_stiffness_matrix(K)
-            dF = self.max_load / self.number_of_load_increments * self._load_increment_vector
-
-            deltau = np.linalg.solve(K_s, dF)
-            u_pre = u + deltau
-            lam_pre = lam + self.max_load / self.number_of_load_increments
 
             # update member data
-            self.update_member_data(u_pre, deltau)
+            if self.__dimension == 2:
+                self.update_member_data_2d(u_pre, lam_pre)
+            else:
+                self.update_member_data_3d(u_pre, lam_pre, Deltau)
 
-            # calculate internal force vector
-            F_int = self.internal_force_vector()
-
-            # calculate the residual of the system
-            r = F_int - lam_pre * self._load_increment_vector
-            r = self.modified_residual(r)
-            r_norm = np.linalg.norm(r)
-
-            # copy them for iteration, "temp" means they are not on equilibrium path.
             u_temp = u_pre
+            deltalam = 0.
+            
+            # initialize iteration counter
+            kiter = 0
+
+            if self.__analysis != "elastic":
+                plastic_strain = []
+                internal_hardening_variable = []
+                for ele in self._structure:
+                    plastic_strain.append(ele.plastic_strain)
+                    internal_hardening_variable.append(
+                        ele.internal_hardening_variable)
+
+            # iterate, until good result or so many iteration steps
+            while(self.residual_norm > tolerance and kiter < max_iteration_steps):
+                u_invhat = spsolve(
+                    self.modified_master_stiffness_matrix, self.modified_residual).reshape(self._number_of_dofs, 1)
+                u_hat = spsolve(
+                    self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
+
+                deltalam += float(u_invhat[self._load_boundary_condition] /
+                                  u_hat[self._load_boundary_condition])
+                deltau = -spsolve(self.modified_master_stiffness_matrix, self.modified_residual - float(
+                    u_invhat[self._load_boundary_condition] / u_hat[self._load_boundary_condition]) * self._load_increment_vector).reshape(self._number_of_dofs, 1)
+
+                u_temp += deltau
+                
+                if self.__analysis != "elastic":
+                    self.update_member_data_2d_iteration(
+                        u_pre + deltau, lam_pre + deltalam, plastic_strain, internal_hardening_variable)
+                else:
+                    if self.__dimension == 2:
+                        self.update_member_data_2d(u_pre + deltau, lam_pre + deltalam)
+                    else:
+                        self.update_member_data_3d(u_temp, lam_pre + deltalam, deltau)
+
+                # update iterations counter
+                kiter += 1
+                print("Iteration step: " + str(kiter))
+                print("residual norm:" + str(self.residual_norm))
+                if(kiter == max_iteration_steps):
+                    raise RuntimeError(
+                        'Newton-Raphson iterations did not converge!')
+
+            self._state_variable_plot.append(
+                float(self._state_variable[self._interesting_dof]))
+            self._control_parameter_plot.append(self._control_parameter)
+            print("Incrementation step: " + str(n + 1))
+
+    def arc_length_control(self, number_of_increments, tolerance, max_iteration_steps, direction, arc_length):
+        if direction == "positive":
+            Deltau_prev = np.ones((self._number_of_dofs, 1), dtype=float)
+        elif direction == "negative":
+            Deltau_prev = -np.ones((self._number_of_dofs, 1), dtype=float)
+        else:
+            raise ValueError("Please input the right direction!")
+
+        for n in range(number_of_increments):
+
+            deltaubar = spsolve(
+                self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
+            Deltalam = np.sign(float(Deltau_prev.T @ deltaubar)) * \
+                arc_length / np.sqrt(float(deltaubar.T @ deltaubar))
+
+            Delta_increment = Deltalam * self._load_increment_vector
+            Deltau = spsolve(
+                self.modified_master_stiffness_matrix, Delta_increment).reshape(self._number_of_dofs, 1)
+
+            u_pre = self._state_variable + Deltau
+            lam_pre = self._control_parameter + Deltalam
+
+            # update member data
+            if self.__dimension == 2:
+                self.update_member_data_2d(u_pre, lam_pre)
+            else:
+                self.update_member_data_3d(u_pre, lam_pre, Deltau)
 
             # initialize iteration counter
             kiter = 0
 
-            plastic_strain = []
-            internal_hardening_variable = []
-            for ele in self._structure:
-                plastic_strain.append(ele.__plastic_strain)
-                internal_hardening_variable.append(
-                    ele.__internal_hardening_variable)
-
-            # iterate, until good result or so many iteration steps
-            while(r_norm > self.tolerance and kiter < self.max_iteration_steps):
-
-                # load-Control
-                K = self.master_stiffness_matrix()
-                K_s = self.modified_master_stiffness_matrix(K)
-                deltau = np.linalg.solve(K_s, -r)
-                u_temp += deltau
-
-                # update member data
-                self.update_member_data_iteration(
-                    u_temp, deltau, plastic_strain, internal_hardening_variable)
-
-                # calculate internal force vector
-                F_int = self.internal_force_vector()
-
-                # calculate the residual of the system
-                r = F_int - lam_pre * self._load_increment_vector
-                r = self.modified_residual(r)
-                r_norm = np.linalg.norm(r)
-
-                # update iterations counter
-                kiter += 1
-                if(kiter == self.max_iteration_steps):
-                    raise RuntimeError(
-                        'Newton-Raphson iterations did not converge!')
-
-            """
-            ------------------------------------------------------------------
-            3. Update variables to their final value for the current increment
-            ------------------------------------------------------------------
-            """
-            u = u_temp
-            lam = lam_pre
-
-            U = np.append(U, -u[self._load_boundary_condition])
-            LAM = np.append(LAM, lam)
-
-        return U, LAM
-
-    def solve_the_system_dis(self):
-        lam = 0.
-        u = np.zeros((self._number_of_dofs, 1), dtype=float)
-        U = np.array([0.], dtype=float)
-        LAM = np.array([0.], dtype=float)
-
-        for n in range(self.number_of_load_increments):
-
-            # set the predictor by equal load increments
-            K = self.master_stiffness_matrix()
-            K_s = self.modified_master_stiffness_matrix(K)
-            q = self._load_increment_vector
-
-            v = np.linalg.solve(K_s, q)
-
-            f = float(np.sqrt(1 + v.T @ v))
-            l = 0.01
-
-            deltalam = np.sign(q.T @ v) * l / np.sqrt(1**2*abs(float(q.T@v)))
-            deltau = deltalam * v
-
-            lam_pre = lam + deltalam
-            u_pre = u + deltau
-
-            # update member data
-            self.update_member_data(u_pre, deltau)
-
-            # calculate internal force vector
-            F_int = self.internal_force_vector()
-
-            c = np.array([[0]])
-
-            # calculate the residual of the system
-            r = F_int - lam_pre * self._load_increment_vector
-            r = self.modified_residual(r)
-            r_norm = np.linalg.norm(r)
-
-            # copy them for iteration, "temp" means they are not on equilibrium path.
             u_temp = u_pre
             lam_temp = lam_pre
+            # deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
+            # deltalam = 0.
 
-            # initialize iteration counter
-            kiter = 0
-
-            plastic_strain = []
-            internal_hardening_variable = []
-            # for ele in self._structure:
-            #     plastic_strain.append(ele.__plastic_strain)
-            # internal_hardening_variable.append(
-            #     ele.__internal_hardening_variable)
+            if self.__analysis != "elastic":
+                plastic_strain = []
+                internal_hardening_variable = []
+                for ele in self._structure:
+                    plastic_strain.append(ele.plastic_strain)
+                    internal_hardening_variable.append(
+                        ele.internal_hardening_variable)
 
             # iterate, until good result or so many iteration steps
-            while(r_norm > self.tolerance and kiter < self.max_iteration_steps):
+            while(self.residual_norm > tolerance and kiter < max_iteration_steps):
 
-                # load-Control
-                K = self.master_stiffness_matrix()
-                K_s = self.modified_master_stiffness_matrix(K)
+                deltau_star = spsolve(
+                    self.modified_master_stiffness_matrix, -self.modified_residual).reshape(self._number_of_dofs, 1)
+                deltau_bar = spsolve(
+                    self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
 
-                v = np.linalg.solve(K_s, q)
-                f = float(np.sqrt(1 + v.T @ v))
+                if kiter == 0:
+                    deltalam = np.sign(float(Deltau.T @ deltaubar)) * \
+                        arc_length / np.sqrt(float(deltaubar.T @ deltaubar))
+                else:
+                    a = float(deltau_bar.T @ deltau_bar)
+                    b = float(2 * (Deltau + deltau_star).T @ deltau_bar)
+                    c = float((Deltau + deltau_star).T @
+                            (Deltau + deltau_star)) - arc_length ** 2
 
-                lhs = np.r_[np.c_[K_s, -q], np.c_[(v / f).T, 1 / f]]
-                rhs = -np.r_[r, c]
-                x = np.linalg.solve(lhs, rhs)
-                deltau = x[0: -1]
-                deltalam = float(x[-1])
+                    [deltalam2_hat, deltalam1_hat] = np.roots([a, b, c])
 
+                    dotprod1 = float(
+                        (Deltau + deltau_star + deltalam1_hat * deltau_bar).T @ Deltau)
+                    dotprod2 = float(
+                        (Deltau + deltau_star + deltalam2_hat * deltau_bar).T @ Deltau)
+
+                    if dotprod1 >= dotprod2:
+                        deltalam = deltalam1_hat
+                    else:
+                        deltalam = deltalam2_hat
+
+                deltau = deltau_star + deltalam * deltau_bar
                 u_temp += deltau
                 lam_temp += deltalam
-
+                
                 # update member data
-                self.update_member_data_iteration(
-                    u_temp, deltau, plastic_strain, internal_hardening_variable)
-
-                # calculate internal force vector
-                F_int = self.internal_force_vector()
-
-                # calculate the residual of the system
-                r = F_int - lam_pre * self._load_increment_vector
-                r = self.modified_residual(r)
-                r_norm = np.linalg.norm(r)
+                if self.__analysis != "elastic":
+                    self.update_member_data_2d_iteration(
+                        u_pre + deltau, lam_pre + deltalam, plastic_strain, internal_hardening_variable)
+                else:
+                    if self.__dimension == 2:
+                        self.update_member_data_2d(u_pre + deltau, lam_pre + deltalam)
+                    else:
+                        self.update_member_data_3d(u_temp, lam_temp, deltau)
 
                 # update iterations counter
                 kiter += 1
-                if(kiter == self.max_iteration_steps):
+                print("Iteration step: " + str(kiter))
+                print("residual norm:" + str(self.residual_norm))
+                if(kiter == max_iteration_steps):
                     raise RuntimeError(
                         'Newton-Raphson iterations did not converge!')
+            
+            
+            # while(self.residual_norm > tolerance and kiter < max_iteration_steps):
+
+            #     deltau_star = spsolve(
+            #         self.modified_master_stiffness_matrix, -self.modified_residual).reshape(self._number_of_dofs, 1)
+            #     deltau_bar = spsolve(
+            #         self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
+            #     Deltau += deltau
+
+            #     a = float(deltau_bar.T @ deltau_bar)
+            #     b = float(2 * (Deltau + deltau_star).T @ deltau_bar)
+            #     c = float((Deltau + deltau_star).T @
+            #               (Deltau + deltau_star)) - arc_length ** 2
+
+            #     [deltalam2_hat, deltalam1_hat] = np.roots([a, b, c])
+
+            #     dotprod1 = float(
+            #         (Deltau + deltau_star + deltalam1_hat * deltau_bar).T @ Deltau)
+            #     dotprod2 = float(
+            #         (Deltau + deltau_star + deltalam2_hat * deltau_bar).T @ Deltau)
+
+            #     if dotprod1 >= dotprod2:
+            #         deltalam += deltalam1_hat
+            #         deltau += (deltau_star + deltalam1_hat * deltau_bar)
+            #     else:
+            #         deltalam += deltalam2_hat
+            #         deltau += (deltau_star + deltalam2_hat * deltau_bar)
+
+            #     # update member data
+            #     if self.__analysis != "elastic":
+            #         self.update_member_data_2d_iteration(
+            #             u_pre + deltau, lam_pre + deltalam, plastic_strain, internal_hardening_variable)
+            #     else:
+            #         if self.__dimension == 2:
+            #             self.update_member_data_2d(u_pre + deltau, lam_pre + deltalam)
+            #         else:
+            #             self.update_member_data_3d(u_pre + deltau, lam_pre + deltalam, deltau)
+
+            #     # update iterations counter
+            #     kiter += 1
+            #     print("Iteration step: " + str(kiter))
+            #     print("residual norm:" + str(self.residual_norm))
+            #     if(kiter == max_iteration_steps):
+            #         raise RuntimeError(
+            #             'Newton-Raphson iterations did not converge!')
 
             """
             ------------------------------------------------------------------
             3. Update variables to their final value for the current increment
             ------------------------------------------------------------------
             """
-            u = u_temp
-            lam = lam_temp
+            Deltau_prev = Deltau + deltau
 
-            U = np.append(U, -u[self._load_boundary_condition])
-            LAM = np.append(LAM, lam)
+            self._state_variable_plot.append(
+                float(self._state_variable[self._interesting_dof]))
+            self._control_parameter_plot.append(self._control_parameter)
+            print("Incrementation step: " + str(n + 1))
 
-        return U, LAM
+    def solve_the_system(self, solver, number_of_increments, tolerance=1e-3, max_iteration_steps=100, load=None, displacement=None, direction=None, arc_length=None):
+        if solver == "load-control":
+            self.load_control(number_of_increments, tolerance,
+                              max_iteration_steps, load)
+        elif solver == "displacement-control":
+            self.displacement_control(
+                number_of_increments, tolerance, max_iteration_steps, displacement)
+        elif solver == "arc-length-control":
+            self.arc_length_control(
+                number_of_increments, tolerance, max_iteration_steps, direction, arc_length)
+        else:
+            raise ValueError("Please input the correct solver!")
 
-
-    def plot_equilibrium_path(self):
+    def plot_equilibrium_path(self, horizontal_flip=False, vertical_flip=False):
         """ Plot the equilibrium path.
 
             Args:
-                U: vector of the state parameters at the interesting dof, [ninc x 1]
-                LAM: vector of the control parameters, [ninc x 1]
+                U: vector of the state args at the interesting dof, [ninc x 1]
+                LAM: vector of the control args, [ninc x 1]
         """
 
         # Plot both configurations
         plt.rc('text', usetex=True)
         plt.rc('font', family='serif')
         fig, ax = plt.subplots()
-        ax.plot(self._state_variable_plot, self._control_parameter_plot, '.-')
+        if horizontal_flip == False and vertical_flip == False:
+            ax.plot(self._state_variable_plot,
+                    self._control_parameter_plot, '.-')
+        elif horizontal_flip == True and vertical_flip == False:
+            inv_state_variable_plot = [-u for u in self._state_variable_plot]
+            ax.plot(inv_state_variable_plot,
+                    self._control_parameter_plot, '.-')
+        elif horizontal_flip == False and vertical_flip == True:
+            inv_control_parameter_plot = [
+                -lam for lam in self._control_parameter_plot]
+            ax.plot(self._state_variable_plot, -
+                    inv_control_parameter_plot, '.-')
+        elif horizontal_flip == True and vertical_flip == True:
+            inv_state_variable_plot = [-u for u in self._state_variable_plot]
+            inv_control_parameter_plot = [
+                -lam for lam in self._control_parameter_plot]
+            ax.plot(inv_state_variable_plot, inv_control_parameter_plot, '.-')
+
         ax.set_xlabel('$u$')
         ax.set_ylabel('$\lambda$')
         ax.set_title('Equilibrium Path')
         ax.grid()
         plt.show()
-    
+
     def plot_the_structure(self):
         """ Plot the UNDEFORMED and the DEFORMED structure.
             Args:
@@ -2240,30 +2334,30 @@ class System():
 
         if self.__dimension == 2:
             X = np.zeros((self._number_of_nodes))
-            Y = np.zeros((self._number_of_nodes))
+            Z = np.zeros((self._number_of_nodes))
             x = np.zeros((self._number_of_nodes))
-            y = np.zeros((self._number_of_nodes))
+            z = np.zeros((self._number_of_nodes))
             for iele in range(self._number_of_elements):
                 X[iele] = self._structure[iele].initial_coordinate_node_1[0]
-                Y[iele] = self._structure[iele].initial_coordinate_node_1[1]
+                Z[iele] = self._structure[iele].initial_coordinate_node_1[1]
                 x[iele] = self._structure[iele].current_coordinate_node_1[0]
-                y[iele] = self._structure[iele].current_coordinate_node_1[1]
+                z[iele] = self._structure[iele].current_coordinate_node_1[1]
                 if iele == self._number_of_elements - 1:
                     X[iele + 1] = self._structure[iele].initial_coordinate_node_2[0]
-                    Y[iele + 1] = self._structure[iele].initial_coordinate_node_2[1]
+                    Z[iele + 1] = self._structure[iele].initial_coordinate_node_2[1]
                     x[iele + 1] = self._structure[iele].current_coordinate_node_2[0]
-                    y[iele + 1] = self._structure[iele].current_coordinate_node_2[1]
+                    z[iele + 1] = self._structure[iele].current_coordinate_node_2[1]
             # Plot both configurations
             plt.rc('text', usetex=True)
             plt.rc('font', family='serif')
             fig, ax = plt.subplots()
-            ax.plot(X, Y, '.--', label='undeformed configuration')
+            ax.plot(X, Z, '.--', label='undeformed configuration')
             # ax.scatter(X, Y)
-            ax.plot(x, y, '.-', label='deformed configuration')
+            ax.plot(x, z, '.-', label='deformed configuration')
             # ax.scatter(x, y)
             ax.legend(loc='lower right')
             ax.set_xlabel('$x$')
-            ax.set_ylabel('$y$')
+            ax.set_ylabel('$z$')
             ax.set_title(
                 'Undeflected(dashed) and Deflected(solid) 2D beam structure')
             ax.grid()

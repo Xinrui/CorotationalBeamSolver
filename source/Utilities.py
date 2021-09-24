@@ -45,7 +45,7 @@ def load_mesh_file(filename):
 
 
 def getEtaAndMu(alpha):
-    if alpha == 0:
+    if alpha == 0.:
         eta = 1 / 12
         mu = 1 / 360
     else:
@@ -79,7 +79,7 @@ def decomposeRotationalVector(PSI, output='all'):
 
     elif output == 'unit_vector':
         psi = np.linalg.norm(PSI)
-        if psi == 0:
+        if psi == 0.:
             u = PSI
         else:
             u = PSI / psi
@@ -87,7 +87,7 @@ def decomposeRotationalVector(PSI, output='all'):
 
     elif output == 'all':
         psi = np.linalg.norm(PSI)
-        if psi == 0:
+        if psi == 0.:
             u = PSI
         else:
             u = PSI / psi
@@ -99,7 +99,7 @@ def getTransformation(PSI, output='all'):
     u, psi, PSI_tilde = decomposeRotationalVector(PSI)
 
     if output == 'all':
-        if psi == 0:
+        if psi == 0.:
             T_s = np.eye(3) + 1 / 2 * PSI_tilde
             detT_s = 1
             T_s_inv = np.eye(3) - 1 / 2 * PSI_tilde
@@ -117,7 +117,7 @@ def getTransformation(PSI, output='all'):
         return T_s, detT_s, T_s_inv
 
     elif output == 'inv':
-        if psi == 0:
+        if psi == 0.:
             T_s_inv = np.eye(3) - 1 / 2 * PSI_tilde
 
         else:
