@@ -534,7 +534,7 @@ class System():
                 else:
                     if self.__dimension == 2:
                         self.update_member_data_2d(
-                            u_pre + deltau, lam_pre + deltalam)
+                            u_temp, lam_pre + deltalam)
                     else:
                         self.update_member_data_3d(
                             u_temp, lam_pre + deltalam, deltau)
