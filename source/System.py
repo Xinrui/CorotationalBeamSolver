@@ -413,11 +413,10 @@ class System():
     
     def load_control(self, number_of_increments, tolerance, max_iteration_steps, load):
         for n in range(number_of_increments):
-            dF = load / number_of_increments * self._load_increment_vector
 
-            Deltau = spsolve(self.modified_master_stiffness_matrix, dF).reshape(
-                self._number_of_dofs, 1)
             Deltalam = load / number_of_increments
+            Deltau = spsolve(self.modified_master_stiffness_matrix, Deltalam * self._load_increment_vector).reshape(
+                self._number_of_dofs, 1)
 
             u_pre = self._state_variable + Deltau
             lam_pre = self._control_parameter + Deltalam
@@ -431,8 +430,6 @@ class System():
             u_temp = u_pre
             # initialize iteration counter
             kiter = 0
-
-            # deltau = np.zeros((self._number_of_dofs, 1), dtype=float)
 
             if self.__analysis != "elastic":
                 plastic_strain = []
@@ -478,15 +475,12 @@ class System():
 
     def displacement_control(self, number_of_increments, tolerance, max_iteration_steps, displacement):
         for n in range(number_of_increments):
-            u_hat = spsolve(
+            velocity = spsolve(
                 self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
 
             Deltalam = float(
-                displacement / (number_of_increments * u_hat[self._load_boundary_condition]))
-
-            dF = Deltalam * self._load_increment_vector
-
-            Deltau = spsolve(self.modified_master_stiffness_matrix, dF).reshape(
+                displacement / (number_of_increments * velocity[self._load_boundary_condition]))
+            Deltau = spsolve(self.modified_master_stiffness_matrix, Deltalam * self._load_increment_vector).reshape(
                 self._number_of_dofs, 1)
 
             u_pre = self._state_variable + Deltau
@@ -499,7 +493,7 @@ class System():
                 self.update_member_data_3d(u_pre, lam_pre, Deltau)
 
             u_temp = u_pre
-            deltalam = 0.
+            lam_temp = lam_pre
 
             # initialize iteration counter
             kiter = 0
@@ -516,28 +510,44 @@ class System():
 
             # iterate, until good result or so many iteration steps
             while(self.residual_norm > tolerance and kiter < max_iteration_steps):
-                u_invhat = spsolve(
-                    self.modified_master_stiffness_matrix, self.modified_residual).reshape(self._number_of_dofs, 1)
-                u_hat = spsolve(
-                    self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
+                # u_invhat = spsolve(
+                #     self.modified_master_stiffness_matrix, self.modified_residual).reshape(self._number_of_dofs, 1)
+                # u_hat = spsolve(
+                #     self.modified_master_stiffness_matrix, self._load_increment_vector).reshape(self._number_of_dofs, 1)
 
-                deltalam += float(u_invhat[self._load_boundary_condition] /
-                                  u_hat[self._load_boundary_condition])
-                deltau = -spsolve(self.modified_master_stiffness_matrix, self.modified_residual - float(
-                    u_invhat[self._load_boundary_condition] / u_hat[self._load_boundary_condition]) * self._load_increment_vector).reshape(self._number_of_dofs, 1)
+                # deltalam += float(u_invhat[self._load_boundary_condition] /
+                #                   u_hat[self._load_boundary_condition])
+                # deltau = -spsolve(self.modified_master_stiffness_matrix, self.modified_residual - float(
+                #     u_invhat[self._load_boundary_condition] / u_hat[self._load_boundary_condition]) * self._load_increment_vector).reshape(self._number_of_dofs, 1)
 
+                # u_temp += deltau
+
+                
+                adjusted_stiffness_matrix = self.modified_master_stiffness_matrix.toarray()
+                adjusted_stiffness_matrix[:, self._load_boundary_condition] = -self._load_increment_vector.reshape(self._number_of_dofs)
+                
+                augmented_solution = -np.linalg.solve(adjusted_stiffness_matrix, self.modified_residual)
+                deltalam = float(augmented_solution[self._load_boundary_condition])
+                deltau = np.copy(augmented_solution)
+                deltau[self._load_boundary_condition, 0] = 0.0
+                
                 u_temp += deltau
-
+                lam_temp += deltalam
+                
                 if self.__analysis != "elastic":
-                    self.update_member_data_2d_iteration(
-                        u_pre + deltau, lam_pre + deltalam, plastic_strain, internal_hardening_variable, back_stress)
+                    if self.__dimension == 2:
+                        self.update_member_data_2d_iteration(
+                            u_temp, lam_temp, plastic_strain, internal_hardening_variable, back_stress)
+                    else:
+                        self.update_member_data_3d_iteration(
+                            u_temp, lam_temp, deltau, plastic_strain, internal_hardening_variable, back_stress)
                 else:
                     if self.__dimension == 2:
                         self.update_member_data_2d(
-                            u_temp, lam_pre + deltalam)
+                            u_temp, lam_temp)
                     else:
                         self.update_member_data_3d(
-                            u_temp, lam_pre + deltalam, deltau)
+                            u_temp, lam_temp, deltau)
 
                 # update iterations counter
                 kiter += 1
@@ -567,9 +577,8 @@ class System():
             Deltalam = np.sign(float(Deltau_prev.T @ deltaubar)) * \
                 arc_length / np.sqrt(float(deltaubar.T @ deltaubar))
 
-            Delta_increment = Deltalam * self._load_increment_vector
             Deltau = spsolve(
-                self.modified_master_stiffness_matrix, Delta_increment).reshape(self._number_of_dofs, 1)
+                self.modified_master_stiffness_matrix, Deltalam * self._load_increment_vector).reshape(self._number_of_dofs, 1)
 
             u_pre = self._state_variable + Deltau
             lam_pre = self._control_parameter + Deltalam
@@ -634,11 +643,11 @@ class System():
                 # update member data
                 if self.__analysis != "elastic":
                     self.update_member_data_2d_iteration(
-                        u_pre + deltau, lam_pre + deltalam, plastic_strain, internal_hardening_variable, back_stress)
+                        u_temp, lam_temp, plastic_strain, internal_hardening_variable, back_stress)
                 else:
                     if self.__dimension == 2:
                         self.update_member_data_2d(
-                            u_pre + deltau, lam_pre + deltalam)
+                            u_temp, lam_temp)
                     else:
                         self.update_member_data_3d(u_temp, lam_temp, deltau)
 

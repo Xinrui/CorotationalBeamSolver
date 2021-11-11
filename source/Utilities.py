@@ -133,21 +133,42 @@ def getTransformation(PSI, output='all'):
         return T_s_inv
 
 
-def deviator(stress):
-    if stress.shape != (3, 1):
-        raise TypeError("Stress must be a 3x1 numpy array!")
-    else:
-        stress_tensor = np.array([[stress[0, 0], stress[1, 0], stress[2, 0]],
-                                  [stress[1, 0], 0., 0.],
-                                  [stress[2, 0], 0., 0.]])
-        p = 1/3 * stress_tensor[0, 0]
-        deviator = stress_tensor - p * np.eye(3)
+# def deviator(stress):
+#     if stress.shape != (3, 1):
+#         raise TypeError("Stress must be a 3x1 numpy array!")
+#     else:
+#         stress_tensor = np.array([[stress[0, 0], stress[1, 0], stress[2, 0]],
+#                                   [stress[1, 0], 0., 0.],
+#                                   [stress[2, 0], 0., 0.]])
+#         p = 1/3 * stress_tensor[0, 0]
+#         deviator = stress_tensor - p * np.eye(3)
         
-        return deviator
+#         return deviator
+
+
+def equivalent_stress(stress):
+    s11, s22, s33, s12, s23, s13 = stress[0, 0], stress[1, 0], stress[2, 0], stress[3, 0], stress[4, 0], stress[5, 0]
+    
+    se = np.sqrt((s11 - s22) ** 2 / 2 + (s22 - s33) ** 2 / 2 + (s33 - s11) ** 2 / 2 + 3 * s12 ** 2 + 3 * s23 ** 2 + 3 * s13 ** 2)
+    
+    return se
+
+
+def equivalent_stress_ders(stress):
+    s11, s22, s33, s12, s23, s13 = stress[0, 0], stress[1, 0], stress[2, 0], stress[3, 0], stress[4, 0], stress[5, 0]
+    
+    ders = np.array([[2*s11-s22-s33, 2*s22-s33-s11, 2*s33-s11-s22, 6*s12, 6*s23, 6*s13]]).T
+    
+    ders /= 2 * equivalent_stress(stress)
 
 
 def unit_tensor():
     return np.array([[1., 1., 1., 0., 0., 0.]]).T
+
+
+def trace(vec):
+    return float(vec[0, 0] + vec[1, 0] + vec[2, 0])
+
 
 def I_dev():
     # return np.array([[2/3, -1/3, -1/3, 0., 0., 0.],
