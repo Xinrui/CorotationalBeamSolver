@@ -2,6 +2,7 @@
 """
 @author: Xinrui Zhou
 """
+from math import sin, cos, sqrt
 import numpy as np
 from scipy.linalg import logm
 import source.Utilities as util
@@ -21,7 +22,7 @@ class CorotationalBeamElement3D():
         the structure is deformed, they will be lowercases.
     """
 
-    def __init__(self):
+    def __init__(self, beamtype, youngs_modulus, poisson_ratio, width, height, initial_coordinate_node_1, initial_coordinate_node_2, element_id):
         """Initialize the beam element with reference configuration.
 
         Args:
@@ -31,642 +32,210 @@ class CorotationalBeamElement3D():
             A: Cross-Sectional areas
             moment_of_inertia_y: 2nd moments of inertia
         """
-        self.__initial_coordinate_node_1 = None
-        self.__initial_coordinate_node_2 = None
-        self.__incremental_global_displacement = np.zeros((12, 1), dtype=float)
-
-        self.__youngs_modulus = None
-        self.__shear_modulus = None
-
-        self.__width = None
-        self.__height = None
-
-        self.__analysis = "elastic"
-        self.__beamtype = "Bernoulli"
-
-        self._current_frame_node_1 = np.eye(3)
-        self._current_frame_node_2 = np.eye(3)
-
-        self.__element_freedom_table = None
-
-        self.__num_of_gauss_locations_xi = 2   # x-axis
-        self.__num_of_gauss_locations_eta = 2  # y-axis
-        self.__num_of_gauss_locations_mu = 2   # z-axis
-
-        # All plastic cases, including Perfect Plasticity / No Hardening
-        self.__yield_stress = None
-
-        # Kinematic Hardening
-        self.__kinematic_hardening_modulus = 0.0
-
-        # Linear Hardening
-        self.__plastic_modulus = None
-
-        # Quadratic Hardening
-        self.__quadratic_coefficient = None
-
-        # Exponential Hardening
-        self.__saturation_stress = None
-
-        # Ramberg-Osgood Hardening
-        self.__modified_modulus = None
-
-        # "exponent" appears in both Exponential Hardening and Ramberg-Osgood
-        # Hardening with different physical meaning
-        self.__exponent = None
-
-        # basic variables
-        # self.__current_length = self.initial_length
-        # self.__q1, self.__q2, self.__q = None, None, None
-        # self.__local_stiffness_matrix = None
-
-    @property
-    def initial_coordinate_node_1(self):
-        return self.__initial_coordinate_node_1
-
-    @initial_coordinate_node_1.setter
-    def initial_coordinate_node_1(self, val):
-        """Set the initial coordinate of node 1: [X1, Y1, Z1]
-
-        Raises:
-            TypeError: If value is not a numpy array.
-
-        """
-
-        if isinstance(val, np.ndarray):
-            self.__initial_coordinate_node_1 = val
-        else:
-            raise TypeError(
-                "The initial coordinate of node 1 must be a 3x1 array!")
-
-    @property
-    def initial_coordinate_node_2(self):
-        return self.__initial_coordinate_node_2
-
-    @initial_coordinate_node_2.setter
-    def initial_coordinate_node_2(self, val):
-        """Set the initial coordinate of node 2: [X2, Y2, Z2]
-
-        Raises:
-            TypeError: If value is not a numpy array.
-
-        """
-
-        if isinstance(val, np.ndarray):
-            self.__initial_coordinate_node_2 = val
-        else:
-            raise TypeError(
-                "The initial coordinate of node 2 must be a 3x1 array!")
-
-    @property
-    def incremental_global_displacement(self):
-        return self.__incremental_global_displacement
-
-    @incremental_global_displacement.setter
-    def incremental_global_displacement(self, val):
-        if isinstance(val, np.ndarray):
-            self.__incremental_global_displacement = val
-        else:
-            raise TypeError(
-                "Global displacement must be a 12x1 array!")
-
-    @property
-    def width(self):
-        return self.__width
-
-    @width.setter
-    def width(self, val):
-        """
-        Set the width of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("The width of beam must be a float number!")
-        elif val <= 0:
-            raise ValueError("The width of beam must be positive!")
-        else:
-            self.__width = val
-
-    @property
-    def height(self):
-        return self.__height
-
-    @height.setter
-    def height(self, val):
-        """
-        Set the height of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("The height of beam must be a float number!")
-        elif val <= 0:
-            raise ValueError("The height of beam must be positive!")
-        else:
-            self.__height = val
-
-    @property
-    def current_coordinate_node_1(self):
-        return self.__initial_coordinate_node_1 + self.__incremental_global_displacement[0: 3]
-
-    @property
-    def current_coordinate_node_2(self):
-        return self.__initial_coordinate_node_2 + self.__incremental_global_displacement[6: 9]
-
-    @property
-    def current_orientation_node_1(self):
-        return self._current_frame_node_1
-
-    @current_orientation_node_1.setter
-    def current_orientation_node_1(self, val):
-        """Set the global nodal rotation of node 1: θ1
-
-        Raises:
-            TypeError: If value is not a float number.
-
-        """
-
-        if isinstance(val, np.ndarray):
-            self._current_frame_node_1 = val
-        else:
-            raise TypeError(
-                "Orientation matrix at node 1 must be a 3x3 matrix!")
-
-    @property
-    def current_orientation_node_2(self):
-        return self._current_frame_node_2
-
-    @current_orientation_node_2.setter
-    def current_orientation_node_2(self, val):
-        """Set the global nodal rotation of node 2: θ2
-
-        Raises:
-            TypeError: If value is not a float number.
-
-        """
-
-        if isinstance(val, np.ndarray):
-            self._current_frame_node_2 = val
-        else:
-            raise TypeError(
-                "Orientation matrix at node 2 must be a 3x3 matrix!")
-
-    @property
-    def yield_stress(self):
-        return self.__yield_stress
-
-    @yield_stress.setter
-    def yield_stress(self, val):
-        """
-        Set the yield stress of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("Yield stress must be a float number!")
-        elif val <= 0:
-            raise ValueError("Moment of inertia must be positive!")
-        else:
-            self.__yield_stress = val
-
-    @property
-    def kinematic_hardening_modulus(self):
-        return self.__kinematic_hardening_modulus
-
-    @kinematic_hardening_modulus.setter
-    def kinematic_hardening_modulus(self, val):
-        """
-        Set the kinematic hardening modulus of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError(
-                "Kinematic hardening modulus must be a float number!")
-        elif val <= 0:
-            raise ValueError("Kinematic hardening modulus must be positive!")
-        else:
-            self.__kinematic_hardening_modulus = val
-
-    @property
-    def plastic_modulus(self):
-        return self.__plastic_modulus
-
-    @plastic_modulus.setter
-    def plastic_modulus(self, val):
-        """
-        Set the plastic modulus of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("Plastic modulus must be a float number!")
-        elif val <= 0:
-            raise ValueError("Plastic modulus must be positive!")
-        else:
-            self.__plastic_modulus = val
-
-    @property
-    def quadratic_coefficient(self):
-        return self.__quadratic_coefficient
-
-    @quadratic_coefficient.setter
-    def quadratic_coefficient(self, val):
-        """
-        Set the quadratic coefficient of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("Quadratic coefficient must be a float number!")
-        elif val <= 0:
-            raise ValueError("Quadratic coefficient must be positive!")
-        else:
-            self.__quadratic_coefficient = val
-
-    @property
-    def saturation_stress(self):
-        return self.__saturation_stress
-
-    @saturation_stress.setter
-    def saturation_stress(self, val):
-        """
-        Set the saturation stress of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("Saturation stress must be a float number!")
-        elif val <= 0:
-            raise ValueError("Saturation stress must be positive!")
-        else:
-            self.__saturation_stress = val
-
-    @property
-    def modified_modulus(self):
-        return self.__modified_modulus
-
-    @modified_modulus.setter
-    def modified_modulus(self, val):
-        """
-        Set the modified modulus of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("Modified modulus must be a float number!")
-        elif val <= 0:
-            raise ValueError("Modified modulus must be positive!")
-        else:
-            self.__modified_modulus = val
-
-    @property
-    def exponent(self):
-        return self.__exponent
-
-    @exponent.setter
-    def exponent(self, val):
-        """
-        Set the exponent of the beam element.
-
-        Raises:
-            TypeError: If value is not a float number.
-            ValueError: If value is not positive.
-
-        """
-        if not isinstance(val, float):
-            raise TypeError("Exponent must be a float number!")
-        elif val <= 0:
-            raise ValueError("Exponent must be positive!")
-        else:
-            self.__exponent = val
-
-    @property
-    def element_freedom_table(self):
-        return self.__element_freedom_table
-
-    @element_freedom_table.setter
-    def element_freedom_table(self, val):
-        if not isinstance(val, int):
-            raise TypeError("Number of the member must be a integer!")
-        elif val < 0:
-            raise ValueError("Number of the member must be non-negative!")
-        else:
-            self.__element_freedom_table = np.linspace(
-                6 * val, 6 * val + 11, num=12, dtype=int)
-
-    @property
-    def youngs_modulus(self):
-        return self.__youngs_modulus
-
-    @youngs_modulus.setter
-    def youngs_modulus(self, val):
-        """Set the Young's modulus of the beam element: __youngs_modulus > 0.
-
-        Raises:
-            TypeError: If value is not a positive float number.
-
-        """
-
-        if not isinstance(val, float):
-            raise TypeError("Young's modulus must be a float number!")
-        elif val <= 0:
-            raise ValueError("Young's modulus must be positive!")
-        else:
-            self.__youngs_modulus = val
-
-    @property
-    def shear_modulus(self):
-        return self.__shear_modulus
-
-    @shear_modulus.setter
-    def shear_modulus(self, val):
-        """Set the Shear modulus of the beam element: __shear_modulus > 0.
-
-        Raises:
-            TypeError: If value is not a positive float number.
-
-        """
-
-        if not isinstance(val, float):
-            raise TypeError("Shear modulus must be a float number!")
-        elif val <= 0:
-            raise ValueError("Shear modulus must be positive!")
-        else:
-            self.__shear_modulus = val
-
-    @property
-    def poisson_ratio(self):
-        return self.__youngs_modulus / (2 * self.__shear_modulus) - 1
-
-    @property
-    def first_lame_constant(self):
-        return self.__youngs_modulus * self.poisson_ratio / (1 + self.poisson_ratio) / (1 - 2 * self.poisson_ratio)
-
-    @property
-    def second_lame_constant(self):
-        return self.__shear_modulus
-
-    @property
-    def bulk_modulus(self):
+        self.initial_coordinate_node_1 = initial_coordinate_node_1
+        self.initial_coordinate_node_2 = initial_coordinate_node_2
+        self.incremental_global_displacement = np.zeros((12, 1), dtype=float)
+
+        self.analysis = "elastic"
+        self.beamtype = beamtype
+        self.youngs_modulus = youngs_modulus
+        self.poisson_ratio = poisson_ratio
+        self.width = width
+        self.height = height
+
+        self.initial_length = self.calculate_initial_length()
+        self.initial_local_frame = self.calculate_initial_local_frame()
+
+        self.first_lame_constant = self.calculate_first_lame_constant()
+        self.second_lame_constant = self.calculate_second_lame_constant()
+        self.bulk_modulus = self.calculate_bulk_modulus()
+        self.area = self.calculate_area()
+        self.moment_of_inertia_y = self.calculate_moment_of_inertia_y()
+        self.moment_of_inertia_z = self.calculate_moment_of_inertia_z()
+        self.polar_moment_of_inertia = self.calculate_polar_moment_of_inertia()
+        self.fourth_order_polar_moment_of_inertia = self.calculate_fourth_order_polar_moment_of_inertia()
+
+        self.current_orientation_node_1 = np.eye(3)
+        self.current_orientation_node_2 = np.eye(3)
+
+        self.element_freedom_table = np.linspace(
+            6 * element_id, 6 * element_id + 11, num=12, dtype=int)
+
+    def calculate_first_lame_constant(self):
+        return self.youngs_modulus * self.poisson_ratio / ((1 + self.poisson_ratio) * (1 - 2 * self.poisson_ratio))
+
+    def calculate_second_lame_constant(self):
+        return self.youngs_modulus / (2 * (1 + self.poisson_ratio))
+
+    def calculate_bulk_modulus(self):
         return self.first_lame_constant + 2/3 * self.second_lame_constant
 
-    @property
-    def area(self):
+    def calculate_area(self):
         """
         Set the cross-sectional area of the beam element.
 
         A = b * h
 
         """
-        return self.__width * self.__height
+        return self.width * self.height
 
-    @property
-    def moment_of_inertia_y(self):
+    def calculate_moment_of_inertia_y(self):
         """
         Set the moment of inertia Iy / I33 of the beam element.
 
         I_y = 1/12 * b * h^3
 
         """
-        return 1/12 * self.__width * (self.__height) ** 3
+        return 1/12 * self.width * (self.height) ** 3
 
-    @property
-    def moment_of_inertia_z(self):
+    def calculate_moment_of_inertia_z(self):
         """
         Set the moment of inertia Iz / I22 of the beam element.
 
         I_z = 1/12 * b^3 * h
 
         """
-        return 1/12 * (self.__width) ** 3 * self.__height
+        return 1/12 * (self.width) ** 3 * self.height
 
-    @property
-    def polar_moment_of_inertia(self):
+    def calculate_polar_moment_of_inertia(self):
         """
         Set the polar moment of inertia Io of the beam element.
 
         I_o = 1/12 * (b^3 * h + b * h^3)
 
         """
-        return 1/12 * (self.__width * (self.__height) ** 3 + (self.__width) ** 3 * self.__height)
+        return 1/12 * (self.width * (self.height) ** 3 + (self.width) ** 3 * self.height)
 
-    @property
-    def fourth_order_polar_moment_of_inertia(self):
+    def calculate_fourth_order_polar_moment_of_inertia(self):
         """
         Set the 4th polar moment of inertia Io of the beam element.
 
         I_rr = b^5 * h / 80 + b^3 * h^3 / 72 + b * h^5 / 80
 
         """
-        return 1/80 * (self.__width * (self.__height) ** 5 + (self.__width) ** 5 * self.__height) + 1/72 * (self.__width) ** 3 * (self.__height) ** 3
+        return 1/80 * (self.width * (self.height) ** 5 + (self.width) ** 5 * self.height) + 1/72 * (self.width) ** 3 * (self.height) ** 3
 
-    @property
-    def plastic_strain(self):
-        return self.__plastic_strain
-
-    @plastic_strain.setter
-    def plastic_strain(self, val):
-        if not isinstance(val, np.ndarray):
-            raise TypeError(
-                "The plastic strain at gauss points of beam must be a numpy array!")
-        else:
-            self.__plastic_strain = val
-
-    @property
-    def internal_hardening_variable(self):
-        return self.__internal_hardening_variable
-
-    @internal_hardening_variable.setter
-    def internal_hardening_variable(self, val):
-        if not isinstance(val, np.ndarray):
-            raise TypeError(
-                "The internal hardening variable at gauss points of beam must be a numpy array!")
-        else:
-            self.__internal_hardening_variable = val
-
-    @property
-    def back_stress(self):
-        return self.__back_stress
-
-    @back_stress.setter
-    def back_stress(self, val):
-        if not isinstance(val, np.ndarray):
-            raise TypeError(
-                "The back stress at gauss points of beam must be a numpy array!")
-        else:
-            self.__back_stress = val
-
-    @property
-    def analysis(self):
-        return self.__analysis
-
-    @analysis.setter
-    def analysis(self, val):
-        if val == "elastic":
-            self.__analysis = val
-        elif val == "perfect plasticity":
-            self.__analysis = val
-            self.__stress = np.zeros(
-                (3, 1, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-            self.__plastic_strain = np.zeros(
-                (3, 1, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-            self.__back_stress = np.zeros(
-                (3, 1, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-            self.__tangent_moduli = np.zeros(
-                (3, 3, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-            tangent_moduli = np.array([[self.__youngs_modulus, 0., 0.],
-                                       [0., self.__shear_modulus, 0.],
-                                       [0., 0., self.__shear_modulus]])
-            for ixi in range(self.__num_of_gauss_locations_xi):
-                for jeta in range(self.__num_of_gauss_locations_eta):
-                    for kmu in range(self.__num_of_gauss_locations_mu):
-                        self.__tangent_moduli[:, :, ixi,
-                                              jeta, kmu] = tangent_moduli
-        elif val == "linear hardening":
-            self.__analysis = val
-            self.__stress = np.zeros(
-                (6, 1, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-            self.__plastic_strain = np.zeros(
-                (6, 1, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-            self.__back_stress = np.zeros(
-                (6, 1, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-            self.__tangent_moduli = np.zeros(
-                (6, 6, self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-
-            tangent_moduli = self.first_lame_constant * util.unit_tensor() @ util.unit_tensor().T + \
-                2 * self.second_lame_constant * np.eye(6)
-            for ixi in range(self.__num_of_gauss_locations_xi):
-                for jeta in range(self.__num_of_gauss_locations_eta):
-                    for kmu in range(self.__num_of_gauss_locations_mu):
-                        self.__tangent_moduli[:, :, ixi,
-                                              jeta, kmu] = tangent_moduli
-            self.__internal_hardening_variable = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-        elif val == "quadratic hardening":
-            self.__analysis = val
-            self.__stress = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__plastic_strain = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__back_stress = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__tangent_moduli = self.__youngs_modulus * \
-                np.ones((self.__num_of_gauss_locations_xi,
-                        self.__num_of_gauss_locations_eta), dtype=float)
-            self.__internal_hardening_variable = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-        elif val == "exponential hardening":
-            self.__analysis = val
-            self.__stress = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__plastic_strain = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__back_stress = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__tangent_moduli = self.__youngs_modulus * \
-                np.ones((self.__num_of_gauss_locations_xi,
-                        self.__num_of_gauss_locations_eta), dtype=float)
-            self.__internal_hardening_variable = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-        elif val == "ramberg-osgood hardening":
-            self.__analysis = val
-            self.__stress = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__plastic_strain = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__back_stress = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-            self.__tangent_moduli = self.__youngs_modulus * \
-                np.ones((self.__num_of_gauss_locations_xi,
-                        self.__num_of_gauss_locations_eta), dtype=float)
-            self.__internal_hardening_variable = np.zeros(
-                (self.__num_of_gauss_locations_xi, self.__num_of_gauss_locations_eta), dtype=float)
-        else:
-            print("These five models are implemented here: 1. elastic; 2. linear hardening; 3. quadratic hardening; 4. exponential hardening; 5. ramberg-osgood hardening.")
-            raise ValueError("Wrong constitutive law!")
-
-    @property
-    def initial_local_frame(self):
-        e_3o = np.array([[0, 0, 1]], dtype=float).T
+    def calculate_initial_local_frame(self, e_3o=np.array([[0, 0, 1]], dtype=float).T):
         e_1o = (self.initial_coordinate_node_2 -
                 self.initial_coordinate_node_1) / self.initial_length
         e_2o = np.cross(e_3o, e_1o, axisa=0, axisb=0, axisc=0)
         return np.c_[e_1o, e_2o, e_3o]
 
-    @property
-    def initial_length(self):
+    def calculate_initial_length(self):
         return np.linalg.norm(self.initial_coordinate_node_2 -
                               self.initial_coordinate_node_1)
 
-    def update_current_length(self):
-        """
-        Calculate the deformed length l of the beam element and
-        save it as an attribute.
-        """
+    def apply_hardening_model(self, hardening_model, gauss_number, yield_stress, kinematic_hardening_modulus, plastic_modulus, saturation_stress,
+                              modified_modulus, exponent):
 
-        # self.__current_length =
+        self.num_of_gauss_locations_xi = gauss_number[0]   # x-axis
+        self.num_of_gauss_locations_eta = gauss_number[1]  # y-axis
+        self.num_of_gauss_locations_mu = gauss_number[2]   # z-axis
 
-    @property
+        self.num_of_gauss_locations = self.num_of_gauss_locations_xi * \
+            self.num_of_gauss_locations_eta * self.num_of_gauss_locations_mu
+
+        [gauss_locations_xi, weights_xi] = np.polynomial.legendre.leggauss(
+            self.num_of_gauss_locations_xi)
+        [gauss_locations_eta, weights_eta] = np.polynomial.legendre.leggauss(
+            self.num_of_gauss_locations_eta)
+        [gauss_locations_mu, weights_mu] = np.polynomial.legendre.leggauss(
+            self.num_of_gauss_locations_mu)
+
+        global_gauss_locations_mat = np.zeros(
+            (3, self.num_of_gauss_locations), dtype=float)
+
+        weights_mat = np.zeros(self.num_of_gauss_locations, dtype=float)
+
+        for ixi in range(self.num_of_gauss_locations_xi):
+            for jeta in range(self.num_of_gauss_locations_eta):
+                for kmu in range(self.num_of_gauss_locations_mu):
+                    x, y, z = self.map_local_coordinate_to_global_coordinate(
+                        gauss_locations_xi[ixi], gauss_locations_eta[jeta], gauss_locations_mu[kmu])
+                    global_gauss_locations_mat[0, ixi * self.num_of_gauss_locations_eta *
+                                               self.num_of_gauss_locations_mu + jeta * self.num_of_gauss_locations_mu + kmu] = x
+                    global_gauss_locations_mat[1, ixi * self.num_of_gauss_locations_eta *
+                                               self.num_of_gauss_locations_mu + jeta * self.num_of_gauss_locations_mu + kmu] = y
+                    global_gauss_locations_mat[2, ixi * self.num_of_gauss_locations_eta *
+                                               self.num_of_gauss_locations_mu + jeta * self.num_of_gauss_locations_mu + kmu] = z
+                    weights_mat[ixi * self.num_of_gauss_locations_eta *
+                                self.num_of_gauss_locations_mu + jeta *
+                                self.num_of_gauss_locations_mu + kmu] = weights_xi[ixi] * weights_eta[jeta] * weights_mu[kmu]
+
+        self.global_gauss_locations_mat = global_gauss_locations_mat
+        self.weights_mat = weights_mat
+
+        if hardening_model == "linear hardening":
+
+            self.analysis = hardening_model
+            self.yield_stress = yield_stress
+            self.plastic_modulus = plastic_modulus
+
+            self.stress = np.zeros(
+                (6, 1, self.num_of_gauss_locations), dtype=float)
+            self.plastic_strain = np.zeros(
+                (6, 1, self.num_of_gauss_locations), dtype=float)
+            self.tangent_moduli = np.zeros(
+                (6, 6, self.num_of_gauss_locations), dtype=float)
+            self.internal_hardening_variable = np.zeros(
+                self.num_of_gauss_locations, dtype=float)
+
+            # initialize tangent moduli
+            elastic_tangent_moduli = self.first_lame_constant * util.unit_tensor() @ util.unit_tensor().T + \
+                2 * self.second_lame_constant * np.eye(6)
+            for n in range(self.num_of_gauss_locations):
+                self.tangent_moduli[:, :, n] = elastic_tangent_moduli
+
+        else:
+            print("In 3D, only linear hardening is implemented.")
+            raise ValueError("Wrong hardening model!")
+
+    def local_displacement(self):
+        p_l = np.zeros((7, 1), dtype=float)
+        R_g = self.current_local_frame()
+
+        R_local_node_1 = (
+            R_g.T) @ self.current_orientation_node_1 @ self.initial_local_frame
+        R_local_node_2 = (
+            R_g.T) @ self.current_orientation_node_2 @ self.initial_local_frame
+
+        log_R_local_node_1 = util.log(R_local_node_1)
+        log_R_local_node_2 = util.log(R_local_node_2)
+
+        p_l[0] = self.current_length() - self.initial_length
+        p_l[1: 4] = util.get_rotational_vector(log_R_local_node_1)
+        p_l[4: 7] = util.get_rotational_vector(log_R_local_node_2)
+
+        return p_l
+
+    def current_local_frame(self):
+        r_1 = (self.current_coordinate_node_2() -
+               self.current_coordinate_node_1()) / self.current_length()
+
+        _, _, q = self.auxiliary_vector()
+
+        r_3 = np.cross(r_1, q, axisa=0, axisb=0, axisc=0)
+        r_3 = r_3 / np.linalg.norm(r_3)
+
+        r_2 = np.cross(r_3, r_1, axisa=0, axisb=0, axisc=0)
+
+        return np.c_[r_1, r_2, r_3]
+
+    def current_coordinate_node_1(self):
+        return self.initial_coordinate_node_1 + self.incremental_global_displacement[0: 3]
+
+    def current_coordinate_node_2(self):
+        return self.initial_coordinate_node_2 + self.incremental_global_displacement[6: 9]
+
     def current_length(self):
         """
         Calculate the deformed length l of the beam element and
         save it as an attribute.
         """
 
-        return np.linalg.norm(self.current_coordinate_node_2 -
-                              self.current_coordinate_node_1)
+        return np.linalg.norm(self.current_coordinate_node_2() -
+                              self.current_coordinate_node_1())
 
-    def update_local_stiffness_matrix(self):
-        u, t11, t21, t31, t12, t22, t32 = self.local_displacement.reshape(7)
-        E, G, A, L, I22, I33, Irr = self.__youngs_modulus, self.__shear_modulus, self.area, self.initial_length, self.moment_of_inertia_z, self.moment_of_inertia_y, self.fourth_order_polar_moment_of_inertia
-        kl = np.array([[1.0*A*E/L, 1.2*E*(I22*t11 - I22*t12 + I33*t11 - I33*t12)/L**2, A*E*(0.133333333333333*t21 - 0.0333333333333333*t22), A*E*(0.133333333333333*t31 - 0.0333333333333333*t32), 1.2*E*(-I22*t11 + I22*t12 - I33*t11 + I33*t12)/L**2, A*E*(-0.0333333333333333*t21 + 0.133333333333333*t22), A*E*(-0.0333333333333333*t31 + 0.133333333333333*t32)], [1.2*E*(I22*t11 - I22*t12 + I33*t11 - I33*t12)/L**2, 0.08*E*I22*t21**2/L - 0.04*E*I22*t21*t22/L + 0.08*E*I22*t22**2/L + 0.08*E*I22*t31**2/L - 0.04*E*I22*t31*t32/L + 0.08*E*I22*t32**2/L + 1.2*E*I22*u/L**2 + 0.08*E*I33*t21**2/L - 0.04*E*I33*t21*t22/L + 0.08*E*I33*t22**2/L + 0.08*E*I33*t31**2/L - 0.04*E*I33*t31*t32/L + 0.08*E*I33*t32**2/L + 1.2*E*I33*u/L**2 + 3.08571428571469*E*Irr*t11**2/L**3 - 6.17142857142937*E*Irr*t11*t12/L**3 + 3.08571428571469*E*Irr*t12**2/L**3 + 1.2*G*I22/L + 1.2*G*I33/L - 0.925714285714687*E*I22**2*t11**2/(A*L**3) + 1.85142857142937*E*I22**2*t11*t12/(A*L**3) - 0.925714285714687*E*I22**2*t12**2/(A*L**3) - 1.85142857142937*E*I22*I33*t11**2/(A*L**3) + 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) - 1.85142857142937*E*I22*I33*t12**2/(A*L**3) - 0.925714285714687*E*I33**2*t11**2/(A*L**3) + 1.85142857142937*E*I33**2*t11*t12/(A*L**3) - 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(0.16*I22*t11*t21 - 0.04*I22*t11*t22 - 0.16*I22*t12*t21 + 0.04*I22*t12*t22 + 0.16*I33*t11*t21 - 0.04*I33*t11*t22 - 0.16*I33*t12*t21 + 0.04*I33*t12*t22)/L, E*(0.16*I22*t11*t31 - 0.04*I22*t11*t32 - 0.16*I22*t12*t31 + 0.04*I22*t12*t32 + 0.16*I33*t11*t31 - 0.04*I33*t11*t32 - 0.16*I33*t12*t31 + 0.04*I33*t12*t32)/L, -0.08*E*I22*t21**2/L + 0.04*E*I22*t21*t22/L - 0.08*E*I22*t22**2/L - 0.08*E*I22*t31**2/L + 0.04*E*I22*t31*t32/L - 0.08*E*I22*t32**2/L - 1.2*E*I22*u/L**2 - 0.08*E*I33*t21**2/L + 0.04*E*I33*t21*t22/L - 0.08*E*I33*t22**2/L - 0.08*E*I33*t31**2/L + 0.04*E*I33*t31*t32/L - 0.08*E*I33*t32**2/L - 1.2*E*I33*u/L**2 - 3.08571428571469*E*Irr*t11**2/L**3 + 6.17142857142937*E*Irr*t11*t12/L**3 - 3.08571428571469*E*Irr*t12**2/L**3 - 1.2*G*I22/L - 1.2*G*I33/L + 0.925714285714687*E*I22**2*t11**2/(A*L**3) - 1.85142857142937*E*I22**2*t11*t12/(A*L**3) + 0.925714285714687*E*I22**2*t12**2/(A*L**3) + 1.85142857142937*E*I22*I33*t11**2/(A*L**3) - 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) + 1.85142857142937*E*I22*I33*t12**2/(A*L**3) + 0.925714285714687*E*I33**2*t11**2/(A*L**3) - 1.85142857142937*E*I33**2*t11*t12/(A*L**3) + 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(-0.04*I22*t11*t21 + 0.16*I22*t11*t22 + 0.04*I22*t12*t21 - 0.16*I22*t12*t22 - 0.04*I33*t11*t21 + 0.16*I33*t11*t22 + 0.04*I33*t12*t21 - 0.16*I33*t12*t22)/L, E*(-0.04*I22*t11*t31 + 0.16*I22*t11*t32 + 0.04*I22*t12*t31 - 0.16*I22*t12*t32 - 0.04*I33*t11*t31 + 0.16*I33*t11*t32 + 0.04*I33*t12*t31 - 0.16*I33*t12*t32)/L], [A*E*(0.133333333333333*t21 - 0.0333333333333333*t22), E*(0.16*I22*t11*t21 - 0.04*I22*t11*t22 - 0.16*I22*t12*t21 + 0.04*I22*t12*t22 + 0.16*I33*t11*t21 - 0.04*I33*t11*t22 - 0.16*I33*t12*t21 + 0.04*I33*t12*t22)/L, E*(0.0266666666666667*A*L**2*t21**2 - 0.0133333333333333*A*L**2*t21*t22 + 0.01*A*L**2*t22**2 + 0.00888888888888889*A*L**2*t31**2 - 0.00444444444444444*A*L**2*t31*t32 + 0.00888888888888889*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2 + 4.0*I33)/L, A*E*L*(0.0177777777777778*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.00111111111111111*t22*t32), E*(-0.16*I22*t11*t21 + 0.04*I22*t11*t22 + 0.16*I22*t12*t21 - 0.04*I22*t12*t22 - 0.16*I33*t11*t21 + 0.04*I33*t11*t22 + 0.16*I33*t12*t21 - 0.04*I33*t12*t22)/L, E*(-0.00666666666666667*A*L**2*t21**2 + 0.02*A*L**2*t21*t22 - 0.00666666666666667*A*L**2*t22**2 - 0.00222222222222222*A*L**2*t31**2 + 0.00111111111111111*A*L**2*t31*t32 - 0.00222222222222222*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2 + 2.0*I33)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.0177777777777778*t21*t32 + 0.00111111111111111*t22*t31 - 0.00444444444444444*t22*t32)], [A*E*(0.133333333333333*t31 - 0.0333333333333333*t32), E*(0.16*I22*t11*t31 - 0.04*I22*t11*t32 - 0.16*I22*t12*t31 + 0.04*I22*t12*t32 + 0.16*I33*t11*t31 - 0.04*I33*t11*t32 - 0.16*I33*t12*t31 + 0.04*I33*t12*t32)/L, A*E*L*(0.0177777777777778*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.00111111111111111*t22*t32), E*(0.00888888888888889*A*L**2*t21**2 - 0.00444444444444444*A*L**2*t21*t22 + 0.00888888888888889*A*L**2*t22**2 + 0.0266666666666667*A*L**2*t31**2 - 0.0133333333333333*A*L**2*t31*t32 + 0.01*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 4.0*I22 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2)/L, E*(-0.16*I22*t11*t31 + 0.04*I22*t11*t32 + 0.16*I22*t12*t31 - 0.04*I22*t12*t32 - 0.16*I33*t11*t31 + 0.04*I33*t11*t32 + 0.16*I33*t12*t31 - 0.04*I33*t12*t32)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.00111111111111111*t21*t32 + 0.0177777777777778*t22*t31 - 0.00444444444444444*t22*t32), E*(-0.00222222222222222*A*L**2*t21**2 + 0.00111111111111111*A*L**2*t21*t22 - 0.00222222222222222*A*L**2*t22**2 - 0.00666666666666667*A*L**2*t31**2 + 0.02*A*L**2*t31*t32 - 0.00666666666666667 *
-                      A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 + 2.0*I22 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2)/L], [1.2*E*(-I22*t11 + I22*t12 - I33*t11 + I33*t12)/L**2, -0.08*E*I22*t21**2/L + 0.04*E*I22*t21*t22/L - 0.08*E*I22*t22**2/L - 0.08*E*I22*t31**2/L + 0.04*E*I22*t31*t32/L - 0.08*E*I22*t32**2/L - 1.2*E*I22*u/L**2 - 0.08*E*I33*t21**2/L + 0.04*E*I33*t21*t22/L - 0.08*E*I33*t22**2/L - 0.08*E*I33*t31**2/L + 0.04*E*I33*t31*t32/L - 0.08*E*I33*t32**2/L - 1.2*E*I33*u/L**2 - 3.08571428571469*E*Irr*t11**2/L**3 + 6.17142857142937*E*Irr*t11*t12/L**3 - 3.08571428571469*E*Irr*t12**2/L**3 - 1.2*G*I22/L - 1.2*G*I33/L + 0.925714285714687*E*I22**2*t11**2/(A*L**3) - 1.85142857142937*E*I22**2*t11*t12/(A*L**3) + 0.925714285714687*E*I22**2*t12**2/(A*L**3) + 1.85142857142937*E*I22*I33*t11**2/(A*L**3) - 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) + 1.85142857142937*E*I22*I33*t12**2/(A*L**3) + 0.925714285714687*E*I33**2*t11**2/(A*L**3) - 1.85142857142937*E*I33**2*t11*t12/(A*L**3) + 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(-0.16*I22*t11*t21 + 0.04*I22*t11*t22 + 0.16*I22*t12*t21 - 0.04*I22*t12*t22 - 0.16*I33*t11*t21 + 0.04*I33*t11*t22 + 0.16*I33*t12*t21 - 0.04*I33*t12*t22)/L, E*(-0.16*I22*t11*t31 + 0.04*I22*t11*t32 + 0.16*I22*t12*t31 - 0.04*I22*t12*t32 - 0.16*I33*t11*t31 + 0.04*I33*t11*t32 + 0.16*I33*t12*t31 - 0.04*I33*t12*t32)/L, 0.08*E*I22*t21**2/L - 0.04*E*I22*t21*t22/L + 0.08*E*I22*t22**2/L + 0.08*E*I22*t31**2/L - 0.04*E*I22*t31*t32/L + 0.08*E*I22*t32**2/L + 1.2*E*I22*u/L**2 + 0.08*E*I33*t21**2/L - 0.04*E*I33*t21*t22/L + 0.08*E*I33*t22**2/L + 0.08*E*I33*t31**2/L - 0.04*E*I33*t31*t32/L + 0.08*E*I33*t32**2/L + 1.2*E*I33*u/L**2 + 3.08571428571469*E*Irr*t11**2/L**3 - 6.17142857142937*E*Irr*t11*t12/L**3 + 3.08571428571469*E*Irr*t12**2/L**3 + 1.2*G*I22/L + 1.2*G*I33/L - 0.925714285714687*E*I22**2*t11**2/(A*L**3) + 1.85142857142937*E*I22**2*t11*t12/(A*L**3) - 0.925714285714687*E*I22**2*t12**2/(A*L**3) - 1.85142857142937*E*I22*I33*t11**2/(A*L**3) + 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) - 1.85142857142937*E*I22*I33*t12**2/(A*L**3) - 0.925714285714687*E*I33**2*t11**2/(A*L**3) + 1.85142857142937*E*I33**2*t11*t12/(A*L**3) - 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(0.04*I22*t11*t21 - 0.16*I22*t11*t22 - 0.04*I22*t12*t21 + 0.16*I22*t12*t22 + 0.04*I33*t11*t21 - 0.16*I33*t11*t22 - 0.04*I33*t12*t21 + 0.16*I33*t12*t22)/L, E*(0.04*I22*t11*t31 - 0.16*I22*t11*t32 - 0.04*I22*t12*t31 + 0.16*I22*t12*t32 + 0.04*I33*t11*t31 - 0.16*I33*t11*t32 - 0.04*I33*t12*t31 + 0.16*I33*t12*t32)/L], [A*E*(-0.0333333333333333*t21 + 0.133333333333333*t22), E*(-0.04*I22*t11*t21 + 0.16*I22*t11*t22 + 0.04*I22*t12*t21 - 0.16*I22*t12*t22 - 0.04*I33*t11*t21 + 0.16*I33*t11*t22 + 0.04*I33*t12*t21 - 0.16*I33*t12*t22)/L, E*(-0.00666666666666667*A*L**2*t21**2 + 0.02*A*L**2*t21*t22 - 0.00666666666666667*A*L**2*t22**2 - 0.00222222222222222*A*L**2*t31**2 + 0.00111111111111111*A*L**2*t31*t32 - 0.00222222222222222*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2 + 2.0*I33)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.00111111111111111*t21*t32 + 0.0177777777777778*t22*t31 - 0.00444444444444444*t22*t32), E*(0.04*I22*t11*t21 - 0.16*I22*t11*t22 - 0.04*I22*t12*t21 + 0.16*I22*t12*t22 + 0.04*I33*t11*t21 - 0.16*I33*t11*t22 - 0.04*I33*t12*t21 + 0.16*I33*t12*t22)/L, E*(0.01*A*L**2*t21**2 - 0.0133333333333333*A*L**2*t21*t22 + 0.0266666666666667*A*L**2*t22**2 + 0.00888888888888889*A*L**2*t31**2 - 0.00444444444444444*A*L**2*t31*t32 + 0.00888888888888889*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2 + 4.0*I33)/L, A*E*L*(0.00111111111111111*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.0177777777777778*t22*t32)], [A*E*(-0.0333333333333333*t31 + 0.133333333333333*t32), E*(-0.04*I22*t11*t31 + 0.16*I22*t11*t32 + 0.04*I22*t12*t31 - 0.16*I22*t12*t32 - 0.04*I33*t11*t31 + 0.16*I33*t11*t32 + 0.04*I33*t12*t31 - 0.16*I33*t12*t32)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.0177777777777778*t21*t32 + 0.00111111111111111*t22*t31 - 0.00444444444444444*t22*t32), E*(-0.00222222222222222*A*L**2*t21**2 + 0.00111111111111111*A*L**2*t21*t22 - 0.00222222222222222*A*L**2*t22**2 - 0.00666666666666667*A*L**2*t31**2 + 0.02*A*L**2*t31*t32 - 0.00666666666666667*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 + 2.0*I22 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2)/L, E*(0.04*I22*t11*t31 - 0.16*I22*t11*t32 - 0.04*I22*t12*t31 + 0.16*I22*t12*t32 + 0.04*I33*t11*t31 - 0.16*I33*t11*t32 - 0.04*I33*t12*t31 + 0.16*I33*t12*t32)/L, A*E*L*(0.00111111111111111*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.0177777777777778*t22*t32), E*(0.00888888888888889*A*L**2*t21**2 - 0.00444444444444444*A*L**2*t21*t22 + 0.00888888888888889*A*L**2*t22**2 + 0.01*A*L**2*t31**2 - 0.0133333333333333*A*L**2*t31*t32 + 0.0266666666666667*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 4.0*I22 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2)/L]])
-        self.__local_stiffness_matrix = kl
-
-    @property
-    def local_stiffness_matrix(self):
-        u, t11, t21, t31, t12, t22, t32 = self.local_displacement.reshape(7)
-        E, G, A, L, I22, I33, Irr = self.__youngs_modulus, self.__shear_modulus, self.area, self.initial_length, self.moment_of_inertia_z, self.moment_of_inertia_y, self.fourth_order_polar_moment_of_inertia
-        kl = np.array([[1.0*A*E/L, 1.2*E*(I22*t11 - I22*t12 + I33*t11 - I33*t12)/L**2, A*E*(0.133333333333333*t21 - 0.0333333333333333*t22), A*E*(0.133333333333333*t31 - 0.0333333333333333*t32), 1.2*E*(-I22*t11 + I22*t12 - I33*t11 + I33*t12)/L**2, A*E*(-0.0333333333333333*t21 + 0.133333333333333*t22), A*E*(-0.0333333333333333*t31 + 0.133333333333333*t32)], [1.2*E*(I22*t11 - I22*t12 + I33*t11 - I33*t12)/L**2, 0.08*E*I22*t21**2/L - 0.04*E*I22*t21*t22/L + 0.08*E*I22*t22**2/L + 0.08*E*I22*t31**2/L - 0.04*E*I22*t31*t32/L + 0.08*E*I22*t32**2/L + 1.2*E*I22*u/L**2 + 0.08*E*I33*t21**2/L - 0.04*E*I33*t21*t22/L + 0.08*E*I33*t22**2/L + 0.08*E*I33*t31**2/L - 0.04*E*I33*t31*t32/L + 0.08*E*I33*t32**2/L + 1.2*E*I33*u/L**2 + 3.08571428571469*E*Irr*t11**2/L**3 - 6.17142857142937*E*Irr*t11*t12/L**3 + 3.08571428571469*E*Irr*t12**2/L**3 + 1.2*G*I22/L + 1.2*G*I33/L - 0.925714285714687*E*I22**2*t11**2/(A*L**3) + 1.85142857142937*E*I22**2*t11*t12/(A*L**3) - 0.925714285714687*E*I22**2*t12**2/(A*L**3) - 1.85142857142937*E*I22*I33*t11**2/(A*L**3) + 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) - 1.85142857142937*E*I22*I33*t12**2/(A*L**3) - 0.925714285714687*E*I33**2*t11**2/(A*L**3) + 1.85142857142937*E*I33**2*t11*t12/(A*L**3) - 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(0.16*I22*t11*t21 - 0.04*I22*t11*t22 - 0.16*I22*t12*t21 + 0.04*I22*t12*t22 + 0.16*I33*t11*t21 - 0.04*I33*t11*t22 - 0.16*I33*t12*t21 + 0.04*I33*t12*t22)/L, E*(0.16*I22*t11*t31 - 0.04*I22*t11*t32 - 0.16*I22*t12*t31 + 0.04*I22*t12*t32 + 0.16*I33*t11*t31 - 0.04*I33*t11*t32 - 0.16*I33*t12*t31 + 0.04*I33*t12*t32)/L, -0.08*E*I22*t21**2/L + 0.04*E*I22*t21*t22/L - 0.08*E*I22*t22**2/L - 0.08*E*I22*t31**2/L + 0.04*E*I22*t31*t32/L - 0.08*E*I22*t32**2/L - 1.2*E*I22*u/L**2 - 0.08*E*I33*t21**2/L + 0.04*E*I33*t21*t22/L - 0.08*E*I33*t22**2/L - 0.08*E*I33*t31**2/L + 0.04*E*I33*t31*t32/L - 0.08*E*I33*t32**2/L - 1.2*E*I33*u/L**2 - 3.08571428571469*E*Irr*t11**2/L**3 + 6.17142857142937*E*Irr*t11*t12/L**3 - 3.08571428571469*E*Irr*t12**2/L**3 - 1.2*G*I22/L - 1.2*G*I33/L + 0.925714285714687*E*I22**2*t11**2/(A*L**3) - 1.85142857142937*E*I22**2*t11*t12/(A*L**3) + 0.925714285714687*E*I22**2*t12**2/(A*L**3) + 1.85142857142937*E*I22*I33*t11**2/(A*L**3) - 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) + 1.85142857142937*E*I22*I33*t12**2/(A*L**3) + 0.925714285714687*E*I33**2*t11**2/(A*L**3) - 1.85142857142937*E*I33**2*t11*t12/(A*L**3) + 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(-0.04*I22*t11*t21 + 0.16*I22*t11*t22 + 0.04*I22*t12*t21 - 0.16*I22*t12*t22 - 0.04*I33*t11*t21 + 0.16*I33*t11*t22 + 0.04*I33*t12*t21 - 0.16*I33*t12*t22)/L, E*(-0.04*I22*t11*t31 + 0.16*I22*t11*t32 + 0.04*I22*t12*t31 - 0.16*I22*t12*t32 - 0.04*I33*t11*t31 + 0.16*I33*t11*t32 + 0.04*I33*t12*t31 - 0.16*I33*t12*t32)/L], [A*E*(0.133333333333333*t21 - 0.0333333333333333*t22), E*(0.16*I22*t11*t21 - 0.04*I22*t11*t22 - 0.16*I22*t12*t21 + 0.04*I22*t12*t22 + 0.16*I33*t11*t21 - 0.04*I33*t11*t22 - 0.16*I33*t12*t21 + 0.04*I33*t12*t22)/L, E*(0.0266666666666667*A*L**2*t21**2 - 0.0133333333333333*A*L**2*t21*t22 + 0.01*A*L**2*t22**2 + 0.00888888888888889*A*L**2*t31**2 - 0.00444444444444444*A*L**2*t31*t32 + 0.00888888888888889*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2 + 4.0*I33)/L, A*E*L*(0.0177777777777778*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.00111111111111111*t22*t32), E*(-0.16*I22*t11*t21 + 0.04*I22*t11*t22 + 0.16*I22*t12*t21 - 0.04*I22*t12*t22 - 0.16*I33*t11*t21 + 0.04*I33*t11*t22 + 0.16*I33*t12*t21 - 0.04*I33*t12*t22)/L, E*(-0.00666666666666667*A*L**2*t21**2 + 0.02*A*L**2*t21*t22 - 0.00666666666666667*A*L**2*t22**2 - 0.00222222222222222*A*L**2*t31**2 + 0.00111111111111111*A*L**2*t31*t32 - 0.00222222222222222*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2 + 2.0*I33)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.0177777777777778*t21*t32 + 0.00111111111111111*t22*t31 - 0.00444444444444444*t22*t32)], [A*E*(0.133333333333333*t31 - 0.0333333333333333*t32), E*(0.16*I22*t11*t31 - 0.04*I22*t11*t32 - 0.16*I22*t12*t31 + 0.04*I22*t12*t32 + 0.16*I33*t11*t31 - 0.04*I33*t11*t32 - 0.16*I33*t12*t31 + 0.04*I33*t12*t32)/L, A*E*L*(0.0177777777777778*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.00111111111111111*t22*t32), E*(0.00888888888888889*A*L**2*t21**2 - 0.00444444444444444*A*L**2*t21*t22 + 0.00888888888888889*A*L**2*t22**2 + 0.0266666666666667*A*L**2*t31**2 - 0.0133333333333333*A*L**2*t31*t32 + 0.01*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 4.0*I22 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2)/L, E*(-0.16*I22*t11*t31 + 0.04*I22*t11*t32 + 0.16*I22*t12*t31 - 0.04*I22*t12*t32 - 0.16*I33*t11*t31 + 0.04*I33*t11*t32 + 0.16*I33*t12*t31 - 0.04*I33*t12*t32)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.00111111111111111*t21*t32 + 0.0177777777777778*t22*t31 - 0.00444444444444444*t22*t32), E*(-0.00222222222222222*A*L**2*t21**2 + 0.00111111111111111*A*L**2*t21*t22 - 0.00222222222222222*A*L**2*t22**2 - 0.00666666666666667*A*L**2*t31**2 + 0.02*A*L**2*t31*t32 - 0.00666666666666667 *
-                      A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 + 2.0*I22 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2)/L], [1.2*E*(-I22*t11 + I22*t12 - I33*t11 + I33*t12)/L**2, -0.08*E*I22*t21**2/L + 0.04*E*I22*t21*t22/L - 0.08*E*I22*t22**2/L - 0.08*E*I22*t31**2/L + 0.04*E*I22*t31*t32/L - 0.08*E*I22*t32**2/L - 1.2*E*I22*u/L**2 - 0.08*E*I33*t21**2/L + 0.04*E*I33*t21*t22/L - 0.08*E*I33*t22**2/L - 0.08*E*I33*t31**2/L + 0.04*E*I33*t31*t32/L - 0.08*E*I33*t32**2/L - 1.2*E*I33*u/L**2 - 3.08571428571469*E*Irr*t11**2/L**3 + 6.17142857142937*E*Irr*t11*t12/L**3 - 3.08571428571469*E*Irr*t12**2/L**3 - 1.2*G*I22/L - 1.2*G*I33/L + 0.925714285714687*E*I22**2*t11**2/(A*L**3) - 1.85142857142937*E*I22**2*t11*t12/(A*L**3) + 0.925714285714687*E*I22**2*t12**2/(A*L**3) + 1.85142857142937*E*I22*I33*t11**2/(A*L**3) - 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) + 1.85142857142937*E*I22*I33*t12**2/(A*L**3) + 0.925714285714687*E*I33**2*t11**2/(A*L**3) - 1.85142857142937*E*I33**2*t11*t12/(A*L**3) + 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(-0.16*I22*t11*t21 + 0.04*I22*t11*t22 + 0.16*I22*t12*t21 - 0.04*I22*t12*t22 - 0.16*I33*t11*t21 + 0.04*I33*t11*t22 + 0.16*I33*t12*t21 - 0.04*I33*t12*t22)/L, E*(-0.16*I22*t11*t31 + 0.04*I22*t11*t32 + 0.16*I22*t12*t31 - 0.04*I22*t12*t32 - 0.16*I33*t11*t31 + 0.04*I33*t11*t32 + 0.16*I33*t12*t31 - 0.04*I33*t12*t32)/L, 0.08*E*I22*t21**2/L - 0.04*E*I22*t21*t22/L + 0.08*E*I22*t22**2/L + 0.08*E*I22*t31**2/L - 0.04*E*I22*t31*t32/L + 0.08*E*I22*t32**2/L + 1.2*E*I22*u/L**2 + 0.08*E*I33*t21**2/L - 0.04*E*I33*t21*t22/L + 0.08*E*I33*t22**2/L + 0.08*E*I33*t31**2/L - 0.04*E*I33*t31*t32/L + 0.08*E*I33*t32**2/L + 1.2*E*I33*u/L**2 + 3.08571428571469*E*Irr*t11**2/L**3 - 6.17142857142937*E*Irr*t11*t12/L**3 + 3.08571428571469*E*Irr*t12**2/L**3 + 1.2*G*I22/L + 1.2*G*I33/L - 0.925714285714687*E*I22**2*t11**2/(A*L**3) + 1.85142857142937*E*I22**2*t11*t12/(A*L**3) - 0.925714285714687*E*I22**2*t12**2/(A*L**3) - 1.85142857142937*E*I22*I33*t11**2/(A*L**3) + 3.70285714285875*E*I22*I33*t11*t12/(A*L**3) - 1.85142857142937*E*I22*I33*t12**2/(A*L**3) - 0.925714285714687*E*I33**2*t11**2/(A*L**3) + 1.85142857142937*E*I33**2*t11*t12/(A*L**3) - 0.925714285714687*E*I33**2*t12**2/(A*L**3), E*(0.04*I22*t11*t21 - 0.16*I22*t11*t22 - 0.04*I22*t12*t21 + 0.16*I22*t12*t22 + 0.04*I33*t11*t21 - 0.16*I33*t11*t22 - 0.04*I33*t12*t21 + 0.16*I33*t12*t22)/L, E*(0.04*I22*t11*t31 - 0.16*I22*t11*t32 - 0.04*I22*t12*t31 + 0.16*I22*t12*t32 + 0.04*I33*t11*t31 - 0.16*I33*t11*t32 - 0.04*I33*t12*t31 + 0.16*I33*t12*t32)/L], [A*E*(-0.0333333333333333*t21 + 0.133333333333333*t22), E*(-0.04*I22*t11*t21 + 0.16*I22*t11*t22 + 0.04*I22*t12*t21 - 0.16*I22*t12*t22 - 0.04*I33*t11*t21 + 0.16*I33*t11*t22 + 0.04*I33*t12*t21 - 0.16*I33*t12*t22)/L, E*(-0.00666666666666667*A*L**2*t21**2 + 0.02*A*L**2*t21*t22 - 0.00666666666666667*A*L**2*t22**2 - 0.00222222222222222*A*L**2*t31**2 + 0.00111111111111111*A*L**2*t31*t32 - 0.00222222222222222*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2 + 2.0*I33)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.00111111111111111*t21*t32 + 0.0177777777777778*t22*t31 - 0.00444444444444444*t22*t32), E*(0.04*I22*t11*t21 - 0.16*I22*t11*t22 - 0.04*I22*t12*t21 + 0.16*I22*t12*t22 + 0.04*I33*t11*t21 - 0.16*I33*t11*t22 - 0.04*I33*t12*t21 + 0.16*I33*t12*t22)/L, E*(0.01*A*L**2*t21**2 - 0.0133333333333333*A*L**2*t21*t22 + 0.0266666666666667*A*L**2*t22**2 + 0.00888888888888889*A*L**2*t31**2 - 0.00444444444444444*A*L**2*t31*t32 + 0.00888888888888889*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2 + 4.0*I33)/L, A*E*L*(0.00111111111111111*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.0177777777777778*t22*t32)], [A*E*(-0.0333333333333333*t31 + 0.133333333333333*t32), E*(-0.04*I22*t11*t31 + 0.16*I22*t11*t32 + 0.04*I22*t12*t31 - 0.16*I22*t12*t32 - 0.04*I33*t11*t31 + 0.16*I33*t11*t32 + 0.04*I33*t12*t31 - 0.16*I33*t12*t32)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.0177777777777778*t21*t32 + 0.00111111111111111*t22*t31 - 0.00444444444444444*t22*t32), E*(-0.00222222222222222*A*L**2*t21**2 + 0.00111111111111111*A*L**2*t21*t22 - 0.00222222222222222*A*L**2*t22**2 - 0.00666666666666667*A*L**2*t31**2 + 0.02*A*L**2*t31*t32 - 0.00666666666666667*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.02*I22*t11**2 + 0.04*I22*t11*t12 - 0.02*I22*t12**2 + 2.0*I22 - 0.02*I33*t11**2 + 0.04*I33*t11*t12 - 0.02*I33*t12**2)/L, E*(0.04*I22*t11*t31 - 0.16*I22*t11*t32 - 0.04*I22*t12*t31 + 0.16*I22*t12*t32 + 0.04*I33*t11*t31 - 0.16*I33*t11*t32 - 0.04*I33*t12*t31 + 0.16*I33*t12*t32)/L, A*E*L*(0.00111111111111111*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.0177777777777778*t22*t32), E*(0.00888888888888889*A*L**2*t21**2 - 0.00444444444444444*A*L**2*t21*t22 + 0.00888888888888889*A*L**2*t22**2 + 0.01*A*L**2*t31**2 - 0.0133333333333333*A*L**2*t31*t32 + 0.0266666666666667*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.08*I22*t11**2 - 0.16*I22*t11*t12 + 0.08*I22*t12**2 + 4.0*I22 + 0.08*I33*t11**2 - 0.16*I33*t11*t12 + 0.08*I33*t12**2)/L]])
-        return kl
-
-    def update_auxiliary_vector(self):
-        q_1 = self.current_orientation_node_1 @ self.initial_local_frame @ np.array([
-                                                                                    [0., 1., 0.]]).T
-        q_2 = self.current_orientation_node_2 @ self.initial_local_frame @ np.array([
-                                                                                    [0., 1., 0.]]).T
-        q = (q_1 + q_2) / 2
-
-        self.__q1, self.__q2, self.__q = q_1, q_2, q
-
-    @property
     def auxiliary_vector(self):
         q_1 = self.current_orientation_node_1 @ self.initial_local_frame @ np.array([
                                                                                     [0., 1., 0.]]).T
@@ -676,88 +245,86 @@ class CorotationalBeamElement3D():
 
         return q_1, q_2, q
 
-    @property
-    def current_local_frame(self):
-        r_1 = (self.current_coordinate_node_2 -
-               self.current_coordinate_node_1) / self.current_length
+    def local_stiffness_force(self):
+        u, t11, t21, t31, t12, t22, t32 = self.local_displacement().reshape(7)
+        E, G, A, L, I22, I33, Irr = self.youngs_modulus, self.second_lame_constant, self.area, self.initial_length, self.moment_of_inertia_z, self.moment_of_inertia_y, self.fourth_order_polar_moment_of_inertia
 
-        self.update_auxiliary_vector()
-        _, _, q = self.auxiliary_vector
+        if self.beamtype == "Bernoulli":
+            kl = np.array([[1.0*A*E/L, 1.0*E*(I22*t11 - I22*t12 + I33*t11 - I33*t12)/L**2, A*E*(0.133333333333333*t21 - 0.0333333333333333*t22), A*E*(0.133333333333333*t31 - 0.0333333333333333*t32), 1.0*E*(-I22*t11 + I22*t12 - I33*t11 + I33*t12)/L**2, A*E*(-0.0333333333333333*t21 + 0.133333333333333*t22), A*E*(-0.0333333333333333*t31 + 0.133333333333333*t32)], [1.0*E*(I22*t11 - I22*t12 + I33*t11 - I33*t12)/L**2, 0.0666666666666667*E*I22*t21**2/L - 0.0333333333333333*E*I22*t21*t22/L + 0.0666666666666667*E*I22*t22**2/L + 0.0666666666666667*E*I22*t31**2/L - 0.0333333333333333*E*I22*t31*t32/L + 0.0666666666666667*E*I22*t32**2/L + 1.0*E*I22*u/L**2 + 0.0666666666666667*E*I33*t21**2/L - 0.0333333333333333*E*I33*t21*t22/L + 0.0666666666666667*E*I33*t22**2/L + 0.0666666666666667*E*I33*t31**2/L - 0.0333333333333333*E*I33*t31*t32/L + 0.0666666666666667*E*I33*t32**2/L + 1.0*E*I33*u/L**2 + 1.5*E*Irr*t11**2/L**3 - 3.0*E*Irr*t11*t12/L**3 + 1.5*E*Irr*t12**2/L**3 + 1.0*G*I22/L + 1.0*G*I33/L, E*(0.133333333333333*I22*t11*t21 - 0.0333333333333333*I22*t11*t22 - 0.133333333333333*I22*t12*t21 + 0.0333333333333333*I22*t12*t22 + 0.133333333333333*I33*t11*t21 - 0.0333333333333333*I33*t11*t22 - 0.133333333333333*I33*t12*t21 + 0.0333333333333333*I33*t12*t22)/L, E*(0.133333333333333*I22*t11*t31 - 0.0333333333333333*I22*t11*t32 - 0.133333333333333*I22*t12*t31 + 0.0333333333333333*I22*t12*t32 + 0.133333333333333*I33*t11*t31 - 0.0333333333333333*I33*t11*t32 - 0.133333333333333*I33*t12*t31 + 0.0333333333333333*I33*t12*t32)/L, -0.0666666666666667*E*I22*t21**2/L + 0.0333333333333333*E*I22*t21*t22/L - 0.0666666666666667*E*I22*t22**2/L - 0.0666666666666667*E*I22*t31**2/L + 0.0333333333333333*E*I22*t31*t32/L - 0.0666666666666667*E*I22*t32**2/L - 1.0*E*I22*u/L**2 - 0.0666666666666667*E*I33*t21**2/L + 0.0333333333333333*E*I33*t21*t22/L - 0.0666666666666667*E*I33*t22**2/L - 0.0666666666666667*E*I33*t31**2/L + 0.0333333333333333*E*I33*t31*t32/L - 0.0666666666666667*E*I33*t32**2/L - 1.0*E*I33*u/L**2 - 1.5*E*Irr*t11**2/L**3 + 3.0*E*Irr*t11*t12/L**3 - 1.5*E*Irr*t12**2/L**3 - 1.0*G*I22/L - 1.0*G*I33/L, E*(-0.0333333333333333*I22*t11*t21 + 0.133333333333333*I22*t11*t22 + 0.0333333333333333*I22*t12*t21 - 0.133333333333333*I22*t12*t22 - 0.0333333333333333*I33*t11*t21 + 0.133333333333333*I33*t11*t22 + 0.0333333333333333*I33*t12*t21 - 0.133333333333333*I33*t12*t22)/L, E*(-0.0333333333333333*I22*t11*t31 + 0.133333333333333*I22*t11*t32 + 0.0333333333333333*I22*t12*t31 - 0.133333333333333*I22*t12*t32 - 0.0333333333333333*I33*t11*t31 + 0.133333333333333*I33*t11*t32 + 0.0333333333333333*I33*t12*t31 - 0.133333333333333*I33*t12*t32)/L], [A*E*(0.133333333333333*t21 - 0.0333333333333333*t22), E*(0.133333333333333*I22*t11*t21 - 0.0333333333333333*I22*t11*t22 - 0.133333333333333*I22*t12*t21 + 0.0333333333333333*I22*t12*t22 + 0.133333333333333*I33*t11*t21 - 0.0333333333333333*I33*t11*t22 - 0.133333333333333*I33*t12*t21 + 0.0333333333333333*I33*t12*t22)/L, E*(0.0266666666666667*A*L**2*t21**2 - 0.0133333333333333*A*L**2*t21*t22 + 0.01*A*L**2*t22**2 + 0.00888888888888889*A*L**2*t31**2 - 0.00444444444444444*A*L**2*t31*t32 + 0.00888888888888889*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.0666666666666667*I22*t11**2 - 0.133333333333333*I22*t11*t12 + 0.0666666666666667*I22*t12**2 + 0.0666666666666667*I33*t11**2 - 0.133333333333333*I33*t11*t12 + 0.0666666666666667*I33*t12**2 + 4.0*I33)/L, A*E*L*(0.0177777777777778*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.00111111111111111*t22*t32), E*(-0.133333333333333*I22*t11*t21 + 0.0333333333333333*I22*t11*t22 + 0.133333333333333*I22*t12*t21 - 0.0333333333333333*I22*t12*t22 - 0.133333333333333*I33*t11*t21 + 0.0333333333333333*I33*t11*t22 + 0.133333333333333*I33*t12*t21 - 0.0333333333333333*I33*t12*t22)/L, E*(-0.00666666666666667*A*L**2*t21**2 + 0.02*A*L**2*t21*t22 - 0.00666666666666667*A*L**2*t22**2 - 0.00222222222222222*A*L**2*t31**2 + 0.00111111111111111*A*L**2*t31*t32 - 0.00222222222222222*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.0166666666666667*I22*t11**2 + 0.0333333333333333*I22*t11*t12 - 0.0166666666666667*I22*t12**2 - 0.0166666666666667*I33*t11**2 + 0.0333333333333333*I33*t11*t12 - 0.0166666666666667*I33*t12**2 + 2.0*I33)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.0177777777777778*t21*t32 + 0.00111111111111111*t22*t31 - 0.00444444444444444*t22*t32)], [A*E*(0.133333333333333*t31 - 0.0333333333333333*t32), E*(0.133333333333333*I22*t11*t31 - 0.0333333333333333*I22*t11*t32 - 0.133333333333333*I22*t12*t31 + 0.0333333333333333*I22*t12*t32 + 0.133333333333333*I33*t11*t31 - 0.0333333333333333*I33*t11*t32 - 0.133333333333333*I33*t12*t31 + 0.0333333333333333*I33*t12*t32)/L, A*E*L*(0.0177777777777778*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.00111111111111111*t22*t32), E*(0.00888888888888889*A*L**2*t21**2 - 0.00444444444444444*A*L**2*t21*t22 + 0.00888888888888889*A*L**2*t22**2 + 0.0266666666666667*A*L**2*t31**2 - 0.0133333333333333*A*L**2*t31*t32 + 0.01*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.0666666666666667*I22*t11**2 - 0.133333333333333*I22*t11*t12 + 0.0666666666666667*I22*t12**2 + 4.0*I22 + 0.0666666666666667*I33*t11**2 - 0.133333333333333*I33*t11*t12 + 0.0666666666666667*I33*t12**2)/L, E*(-0.133333333333333*I22*t11*t31 + 0.0333333333333333*I22*t11*t32 + 0.133333333333333*I22*t12*t31 - 0.0333333333333333*I22*t12*t32 - 0.133333333333333*I33*t11*t31 + 0.0333333333333333*I33*t11*t32 + 0.133333333333333*I33*t12*t31 - 0.0333333333333333*I33*t12*t32)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.00111111111111111*t21*t32 + 0.0177777777777778*t22*t31 - 0.00444444444444444*t22*t32), E*(-0.00222222222222222*A*L**2*t21**2 + 0.00111111111111111*A*L**2*t21*t22 - 0.00222222222222222*A*L**2*t22**2 - 0.00666666666666667*A*L**2*t31**2 + 0.02*A*L**2*t31*t32 - 0.00666666666666667*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.0166666666666667*I22*t11**2 +
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  0.0333333333333333*I22*t11*t12 - 0.0166666666666667*I22*t12**2 + 2.0*I22 - 0.0166666666666667*I33*t11**2 + 0.0333333333333333*I33*t11*t12 - 0.0166666666666667*I33*t12**2)/L], [1.0*E*(-I22*t11 + I22*t12 - I33*t11 + I33*t12)/L**2, -0.0666666666666667*E*I22*t21**2/L + 0.0333333333333333*E*I22*t21*t22/L - 0.0666666666666667*E*I22*t22**2/L - 0.0666666666666667*E*I22*t31**2/L + 0.0333333333333333*E*I22*t31*t32/L - 0.0666666666666667*E*I22*t32**2/L - 1.0*E*I22*u/L**2 - 0.0666666666666667*E*I33*t21**2/L + 0.0333333333333333*E*I33*t21*t22/L - 0.0666666666666667*E*I33*t22**2/L - 0.0666666666666667*E*I33*t31**2/L + 0.0333333333333333*E*I33*t31*t32/L - 0.0666666666666667*E*I33*t32**2/L - 1.0*E*I33*u/L**2 - 1.5*E*Irr*t11**2/L**3 + 3.0*E*Irr*t11*t12/L**3 - 1.5*E*Irr*t12**2/L**3 - 1.0*G*I22/L - 1.0*G*I33/L, E*(-0.133333333333333*I22*t11*t21 + 0.0333333333333333*I22*t11*t22 + 0.133333333333333*I22*t12*t21 - 0.0333333333333333*I22*t12*t22 - 0.133333333333333*I33*t11*t21 + 0.0333333333333333*I33*t11*t22 + 0.133333333333333*I33*t12*t21 - 0.0333333333333333*I33*t12*t22)/L, E*(-0.133333333333333*I22*t11*t31 + 0.0333333333333333*I22*t11*t32 + 0.133333333333333*I22*t12*t31 - 0.0333333333333333*I22*t12*t32 - 0.133333333333333*I33*t11*t31 + 0.0333333333333333*I33*t11*t32 + 0.133333333333333*I33*t12*t31 - 0.0333333333333333*I33*t12*t32)/L, 0.0666666666666667*E*I22*t21**2/L - 0.0333333333333333*E*I22*t21*t22/L + 0.0666666666666667*E*I22*t22**2/L + 0.0666666666666667*E*I22*t31**2/L - 0.0333333333333333*E*I22*t31*t32/L + 0.0666666666666667*E*I22*t32**2/L + 1.0*E*I22*u/L**2 + 0.0666666666666667*E*I33*t21**2/L - 0.0333333333333333*E*I33*t21*t22/L + 0.0666666666666667*E*I33*t22**2/L + 0.0666666666666667*E*I33*t31**2/L - 0.0333333333333333*E*I33*t31*t32/L + 0.0666666666666667*E*I33*t32**2/L + 1.0*E*I33*u/L**2 + 1.5*E*Irr*t11**2/L**3 - 3.0*E*Irr*t11*t12/L**3 + 1.5*E*Irr*t12**2/L**3 + 1.0*G*I22/L + 1.0*G*I33/L, E*(0.0333333333333333*I22*t11*t21 - 0.133333333333333*I22*t11*t22 - 0.0333333333333333*I22*t12*t21 + 0.133333333333333*I22*t12*t22 + 0.0333333333333333*I33*t11*t21 - 0.133333333333333*I33*t11*t22 - 0.0333333333333333*I33*t12*t21 + 0.133333333333333*I33*t12*t22)/L, E*(0.0333333333333333*I22*t11*t31 - 0.133333333333333*I22*t11*t32 - 0.0333333333333333*I22*t12*t31 + 0.133333333333333*I22*t12*t32 + 0.0333333333333333*I33*t11*t31 - 0.133333333333333*I33*t11*t32 - 0.0333333333333333*I33*t12*t31 + 0.133333333333333*I33*t12*t32)/L], [A*E*(-0.0333333333333333*t21 + 0.133333333333333*t22), E*(-0.0333333333333333*I22*t11*t21 + 0.133333333333333*I22*t11*t22 + 0.0333333333333333*I22*t12*t21 - 0.133333333333333*I22*t12*t22 - 0.0333333333333333*I33*t11*t21 + 0.133333333333333*I33*t11*t22 + 0.0333333333333333*I33*t12*t21 - 0.133333333333333*I33*t12*t22)/L, E*(-0.00666666666666667*A*L**2*t21**2 + 0.02*A*L**2*t21*t22 - 0.00666666666666667*A*L**2*t22**2 - 0.00222222222222222*A*L**2*t31**2 + 0.00111111111111111*A*L**2*t31*t32 - 0.00222222222222222*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.0166666666666667*I22*t11**2 + 0.0333333333333333*I22*t11*t12 - 0.0166666666666667*I22*t12**2 - 0.0166666666666667*I33*t11**2 + 0.0333333333333333*I33*t11*t12 - 0.0166666666666667*I33*t12**2 + 2.0*I33)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.00111111111111111*t21*t32 + 0.0177777777777778*t22*t31 - 0.00444444444444444*t22*t32), E*(0.0333333333333333*I22*t11*t21 - 0.133333333333333*I22*t11*t22 - 0.0333333333333333*I22*t12*t21 + 0.133333333333333*I22*t12*t22 + 0.0333333333333333*I33*t11*t21 - 0.133333333333333*I33*t11*t22 - 0.0333333333333333*I33*t12*t21 + 0.133333333333333*I33*t12*t22)/L, E*(0.01*A*L**2*t21**2 - 0.0133333333333333*A*L**2*t21*t22 + 0.0266666666666667*A*L**2*t22**2 + 0.00888888888888889*A*L**2*t31**2 - 0.00444444444444444*A*L**2*t31*t32 + 0.00888888888888889*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.0666666666666667*I22*t11**2 - 0.133333333333333*I22*t11*t12 + 0.0666666666666667*I22*t12**2 + 0.0666666666666667*I33*t11**2 - 0.133333333333333*I33*t11*t12 + 0.0666666666666667*I33*t12**2 + 4.0*I33)/L, A*E*L*(0.00111111111111111*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.0177777777777778*t22*t32)], [A*E*(-0.0333333333333333*t31 + 0.133333333333333*t32), E*(-0.0333333333333333*I22*t11*t31 + 0.133333333333333*I22*t11*t32 + 0.0333333333333333*I22*t12*t31 - 0.133333333333333*I22*t12*t32 - 0.0333333333333333*I33*t11*t31 + 0.133333333333333*I33*t11*t32 + 0.0333333333333333*I33*t12*t31 - 0.133333333333333*I33*t12*t32)/L, A*E*L*(-0.00444444444444444*t21*t31 + 0.0177777777777778*t21*t32 + 0.00111111111111111*t22*t31 - 0.00444444444444444*t22*t32), E*(-0.00222222222222222*A*L**2*t21**2 + 0.00111111111111111*A*L**2*t21*t22 - 0.00222222222222222*A*L**2*t22**2 - 0.00666666666666667*A*L**2*t31**2 + 0.02*A*L**2*t31*t32 - 0.00666666666666667*A*L**2*t32**2 - 0.0333333333333333*A*L*u - 0.0166666666666667*I22*t11**2 + 0.0333333333333333*I22*t11*t12 - 0.0166666666666667*I22*t12**2 + 2.0*I22 - 0.0166666666666667*I33*t11**2 + 0.0333333333333333*I33*t11*t12 - 0.0166666666666667*I33*t12**2)/L, E*(0.0333333333333333*I22*t11*t31 - 0.133333333333333*I22*t11*t32 - 0.0333333333333333*I22*t12*t31 + 0.133333333333333*I22*t12*t32 + 0.0333333333333333*I33*t11*t31 - 0.133333333333333*I33*t11*t32 - 0.0333333333333333*I33*t12*t31 + 0.133333333333333*I33*t12*t32)/L, A*E*L*(0.00111111111111111*t21*t31 - 0.00444444444444444*t21*t32 - 0.00444444444444444*t22*t31 + 0.0177777777777778*t22*t32), E*(0.00888888888888889*A*L**2*t21**2 - 0.00444444444444444*A*L**2*t21*t22 + 0.00888888888888889*A*L**2*t22**2 + 0.01*A*L**2*t31**2 - 0.0133333333333333*A*L**2*t31*t32 + 0.0266666666666667*A*L**2*t32**2 + 0.133333333333333*A*L*u + 0.0666666666666667*I22*t11**2 - 0.133333333333333*I22*t11*t12 + 0.0666666666666667*I22*t12**2 + 4.0*I22 + 0.0666666666666667*I33*t11**2 - 0.133333333333333*I33*t11*t12 + 0.0666666666666667*I33*t12**2)/L]])
+            fl = np.array([[E*(0.0666666666666667*A*L**2*t21**2 - 0.0333333333333333*A*L**2*t21*t22 + 0.0666666666666667*A*L**2*t22**2 + 0.0666666666666667*A*L**2*t31**2 - 0.0333333333333333*A*L**2*t31*t32 + 0.0666666666666667*A*L**2*t32**2 + 1.0*A*L*u + 0.5*I22*t11**2 - 1.0*I22*t11*t12 + 0.5*I22*t12**2 + 0.5*I33*t11**2 - 1.0*I33*t11*t12 + 0.5*I33*t12**2)/L**2, 0.0666666666666667*E*I22*t11*t21**2/L - 0.0333333333333333*E*I22*t11*t21*t22/L + 0.0666666666666667*E*I22*t11*t22**2/L + 0.0666666666666667*E*I22*t11*t31**2/L - 0.0333333333333333*E*I22*t11*t31*t32/L + 0.0666666666666667*E*I22*t11*t32**2/L - 0.0666666666666667*E*I22*t12*t21**2/L + 0.0333333333333333*E*I22*t12*t21*t22/L - 0.0666666666666667*E*I22*t12*t22**2/L - 0.0666666666666667*E*I22*t12*t31**2/L + 0.0333333333333333*E*I22*t12*t31*t32/L - 0.0666666666666667*E*I22*t12*t32**2/L + 1.0*E*I22*t11*u/L**2 - 1.0*E*I22*t12*u/L**2 + 0.0666666666666667*E*I33*t11*t21**2/L - 0.0333333333333333*E*I33*t11*t21*t22/L + 0.0666666666666667*E*I33*t11*t22**2/L + 0.0666666666666667*E*I33*t11*t31**2/L - 0.0333333333333333*E*I33*t11*t31*t32/L + 0.0666666666666667*E*I33*t11*t32**2/L - 0.0666666666666667*E*I33*t12*t21**2/L + 0.0333333333333333*E*I33*t12*t21*t22/L - 0.0666666666666667*E*I33*t12*t22**2/L - 0.0666666666666667*E*I33*t12*t31**2/L + 0.0333333333333333*E*I33*t12*t31*t32/L - 0.0666666666666667*E*I33*t12*t32**2/L + 1.0*E*I33*t11*u/L**2 - 1.0*E*I33*t12*u/L**2 + 0.5*E*Irr*t11**3/L**3 - 1.5*E*Irr*t11**2*t12/L**3 + 1.5*E*Irr*t11*t12**2/L**3 - 0.5*E*Irr*t12**3/L**3 + 1.0*G*I22*t11/L - 1.0*G*I22*t12/L + 1.0*G*I33*t11/L - 1.0*G*I33*t12/L, 1.0*E*(0.00888888888888889*A*L**2*t21**3 - 0.00666666666666667*A*L**2*t21**2*t22 + 0.01*A*L**2*t21*t22**2 + 0.00888888888888889*A*L**2*t21*t31**2 - 0.00444444444444444*A*L**2*t21*t31*t32 + 0.00888888888888889*A*L**2*t21*t32**2 - 0.00222222222222222*A*L**2*t22**3 - 0.00222222222222222*A*L**2*t22*t31**2 + 0.00111111111111111*A*L**2*t22*t31*t32 - 0.00222222222222222*A*L**2*t22*t32**2 + 0.133333333333333*A*L*t21*u - 0.0333333333333333*A*L*t22*u + 0.0666666666666667*I22*t11**2*t21 - 0.0166666666666667*I22*t11**2*t22 - 0.133333333333333*I22*t11*t12*t21 + 0.0333333333333333*I22*t11*t12*t22 + 0.0666666666666667*I22*t12**2*t21 - 0.0166666666666667*I22*t12**2*t22 + 0.0666666666666667*I33*t11**2*t21 - 0.0166666666666667*I33*t11**2*t22 - 0.133333333333333*I33*t11*t12*t21 + 0.0333333333333333*I33*t11*t12*t22 + 0.0666666666666667*I33*t12**2*t21 - 0.0166666666666667*I33*t12**2*t22 + 4.0*I33*t21 + 2.0*I33*t22)/L, 1.0*E*(0.00888888888888889*A*L**2*t21**2*t31 - 0.00222222222222222*A*L**2*t21**2*t32 - 0.00444444444444444*A*L**2*t21*t22*t31 + 0.00111111111111111*A*L**2*t21*t22*t32 + 0.00888888888888889*A*L**2*t22**2*t31 - 0.00222222222222222*A*L**2*t22**2*t32 + 0.00888888888888889*A*L**2*t31**3 - 0.00666666666666667*A*L**2*t31**2*t32 + 0.01*A*L**2*t31*t32**2 - 0.00222222222222222*A*L**2*t32**3 + 0.133333333333333*A*L*t31*u - 0.0333333333333333*A*L*t32*u + 0.0666666666666667*I22*t11**2*t31 - 0.0166666666666667*I22*t11**2*t32 - 0.133333333333333*I22*t11*t12*t31 + 0.0333333333333333*I22*t11*t12*t32 + 0.0666666666666667*I22*t12**2*t31 - 0.0166666666666667*I22*t12**2*t32 + 4.0*I22*t31 + 2.0*I22*t32 + 0.0666666666666667*I33*t11**2*t31 -
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     0.0166666666666667*I33*t11**2*t32 - 0.133333333333333*I33*t11*t12*t31 + 0.0333333333333333*I33*t11*t12*t32 + 0.0666666666666667*I33*t12**2*t31 - 0.0166666666666667*I33*t12**2*t32)/L, -0.0666666666666667*E*I22*t11*t21**2/L + 0.0333333333333333*E*I22*t11*t21*t22/L - 0.0666666666666667*E*I22*t11*t22**2/L - 0.0666666666666667*E*I22*t11*t31**2/L + 0.0333333333333333*E*I22*t11*t31*t32/L - 0.0666666666666667*E*I22*t11*t32**2/L + 0.0666666666666667*E*I22*t12*t21**2/L - 0.0333333333333333*E*I22*t12*t21*t22/L + 0.0666666666666667*E*I22*t12*t22**2/L + 0.0666666666666667*E*I22*t12*t31**2/L - 0.0333333333333333*E*I22*t12*t31*t32/L + 0.0666666666666667*E*I22*t12*t32**2/L - 1.0*E*I22*t11*u/L**2 + 1.0*E*I22*t12*u/L**2 - 0.0666666666666667*E*I33*t11*t21**2/L + 0.0333333333333333*E*I33*t11*t21*t22/L - 0.0666666666666667*E*I33*t11*t22**2/L - 0.0666666666666667*E*I33*t11*t31**2/L + 0.0333333333333333*E*I33*t11*t31*t32/L - 0.0666666666666667*E*I33*t11*t32**2/L + 0.0666666666666667*E*I33*t12*t21**2/L - 0.0333333333333333*E*I33*t12*t21*t22/L + 0.0666666666666667*E*I33*t12*t22**2/L + 0.0666666666666667*E*I33*t12*t31**2/L - 0.0333333333333333*E*I33*t12*t31*t32/L + 0.0666666666666667*E*I33*t12*t32**2/L - 1.0*E*I33*t11*u/L**2 + 1.0*E*I33*t12*u/L**2 - 0.5*E*Irr*t11**3/L**3 + 1.5*E*Irr*t11**2*t12/L**3 - 1.5*E*Irr*t11*t12**2/L**3 + 0.5*E*Irr*t12**3/L**3 - 1.0*G*I22*t11/L + 1.0*G*I22*t12/L - 1.0*G*I33*t11/L + 1.0*G*I33*t12/L, E*(-0.00222222222222222*A*L**2*t21**3 + 0.01*A*L**2*t21**2*t22 - 0.00666666666666667*A*L**2*t21*t22**2 - 0.00222222222222222*A*L**2*t21*t31**2 + 0.00111111111111111*A*L**2*t21*t31*t32 - 0.00222222222222222*A*L**2*t21*t32**2 + 0.00888888888888889*A*L**2*t22**3 + 0.00888888888888889*A*L**2*t22*t31**2 - 0.00444444444444444*A*L**2*t22*t31*t32 + 0.00888888888888889*A*L**2*t22*t32**2 - 0.0333333333333333*A*L*t21*u + 0.133333333333333*A*L*t22*u - 0.0166666666666667*I22*t11**2*t21 + 0.0666666666666667*I22*t11**2*t22 + 0.0333333333333333*I22*t11*t12*t21 - 0.133333333333333*I22*t11*t12*t22 - 0.0166666666666667*I22*t12**2*t21 + 0.0666666666666667*I22*t12**2*t22 - 0.0166666666666667*I33*t11**2*t21 + 0.0666666666666667*I33*t11**2*t22 + 0.0333333333333333*I33*t11*t12*t21 - 0.133333333333333*I33*t11*t12*t22 - 0.0166666666666667*I33*t12**2*t21 + 0.0666666666666667*I33*t12**2*t22 + 2.0*I33*t21 + 4.0*I33*t22)/L, E*(-0.00222222222222222*A*L**2*t21**2*t31 + 0.00888888888888889*A*L**2*t21**2*t32 + 0.00111111111111111*A*L**2*t21*t22*t31 - 0.00444444444444444*A*L**2*t21*t22*t32 - 0.00222222222222222*A*L**2*t22**2*t31 + 0.00888888888888889*A*L**2*t22**2*t32 - 0.00222222222222222*A*L**2*t31**3 + 0.01*A*L**2*t31**2*t32 - 0.00666666666666667*A*L**2*t31*t32**2 + 0.00888888888888889*A*L**2*t32**3 - 0.0333333333333333*A*L*t31*u + 0.133333333333333*A*L*t32*u - 0.0166666666666667*I22*t11**2*t31 + 0.0666666666666667*I22*t11**2*t32 + 0.0333333333333333*I22*t11*t12*t31 - 0.133333333333333*I22*t11*t12*t32 - 0.0166666666666667*I22*t12**2*t31 + 0.0666666666666667*I22*t12**2*t32 + 2.0*I22*t31 + 4.0*I22*t32 - 0.0166666666666667*I33*t11**2*t31 + 0.0666666666666667*I33*t11**2*t32 + 0.0333333333333333*I33*t11*t12*t31 - 0.133333333333333*I33*t11*t12*t32 - 0.0166666666666667*I33*t12**2*t31 + 0.0666666666666667*I33*t12**2*t32)/L]]).T 
+        
+        elif self.beamtype == "Timoshenko":
+            kl = np.array([[1.0*A*E/L, 0.75*E*Irr*(I22 + I33)*(t11 - t12)**5/L**6, 0, 0, -0.75*E*Irr*(I22 + I33)*(t11 - t12)**5/L**6, 0, 0], [0.75*E*Irr*(I22 + I33)*(t11 - t12)**5/L**6, (I22 + I33)*(3.75*E*Irr*u*(t11 - t12)**4 + 1.0*G*L**5)/L**6, 0, 0, -(I22 + I33)*(3.75*E*Irr*u*(t11 - t12)**4 + 1.0*G*L**5)/L**6, 0, 0], [0, 0, 0.25*A*G*L + 1.0*E*I33/L, 0, 0, 0.25*A*G*L - 1.0*E*I33/L, 0], [
+                          0, 0, 0, 0.25*A*G*L + 1.0*E*I22/L, 0, 0, 0.25*A*G*L - 1.0*E*I22/L], [-0.75*E*Irr*(I22 + I33)*(t11 - t12)**5/L**6, -(I22 + I33)*(3.75*E*Irr*u*(t11 - t12)**4 + 1.0*G*L**5)/L**6, 0, 0, (I22 + I33)*(3.75*E*Irr*u*(t11 - t12)**4 + 1.0*G*L**5)/L**6, 0, 0], [0, 0, 0.25*A*G*L - 1.0*E*I33/L, 0, 0, 0.25*A*G*L + 1.0*E*I33/L, 0], [0, 0, 0, 0.25*A*G*L - 1.0*E*I22/L, 0, 0, 0.25*A*G*L + 1.0*E*I22/L]])
+            fl = np.array([[0.125*E*(8*A*L**5*u + Irr*(I22 + I33)*(t11 - t12)**6)/L**6, (I22 + I33)*(t11 - t12)*(0.75*E*Irr*u*(t11 - t12)**4 + G*L**5)/L**6, (0.25*A*G*L**2*(t21 + t22) + E*I33*(t21 - t22))/L, (0.25*A*G*L**2*(
+                t31 + t32) + E*I22*(t31 - t32))/L, -(I22 + I33)*(t11 - t12)*(0.75*E*Irr*u*(t11 - t12)**4 + 1.0*G*L**5)/L**6, (0.25*A*G*L**2*(t21 + t22) - 1.0*E*I33*(t21 - t22))/L, (0.25*A*G*L**2*(t31 + t32) - 1.0*E*I22*(t31 - t32))/L]]).T
 
-        r_3 = np.cross(r_1, q, axisa=0, axisb=0, axisc=0)
-        r_3 = r_3 / np.linalg.norm(r_3)
-
-        r_2 = np.cross(r_3, r_1, axisa=0, axisb=0, axisc=0)
-
-        return np.c_[r_1, r_2, r_3]
-
-    @property
-    def local_displacement(self):
-        p_l = np.zeros((7, 1), dtype=float)
-
-        theta_1_tilde = logm(self.current_local_frame.T @
-                             self.current_orientation_node_1 @ self.initial_local_frame)
-        theta_2_tilde = logm(self.current_local_frame.T @
-                             self.current_orientation_node_2 @ self.initial_local_frame)
-
-        p_l[0] = self.current_length - self.initial_length
-        p_l[1: 4] = util.decomposeSkewSymmetric(theta_1_tilde)
-        p_l[4: 7] = util.decomposeSkewSymmetric(theta_2_tilde)
-
-        return p_l
-
-    @property
-    def local_force(self):
-        u, t11, t21, t31, t12, t22, t32 = self.local_displacement.reshape(7)
-        E, G, A, L, I22, I33, Irr = self.__youngs_modulus, self.__shear_modulus, self.area, self.initial_length, self.moment_of_inertia_z, self.moment_of_inertia_y, self.fourth_order_polar_moment_of_inertia
-
-        fl = np.array([[E*(0.0666666666666667*A*L**2*t21**2 - 0.0333333333333333*A*L**2*t21*t22 + 0.0666666666666667*A*L**2*t22**2 + 0.0666666666666667*A*L**2*t31**2 - 0.0333333333333333*A*L**2*t31*t32 + 0.0666666666666667*A*L**2*t32**2 + 1.0*A*L*u + 0.6*I22*t11**2 - 1.2*I22*t11*t12 + 0.6*I22*t12**2 + 0.6*I33*t11**2 - 1.2*I33*t11*t12 + 0.6*I33*t12**2)/L**2, 0.08*E*I22*t11*t21**2/L - 0.04*E*I22*t11*t21*t22/L + 0.08*E*I22*t11*t22**2/L + 0.08*E*I22*t11*t31**2/L - 0.04*E*I22*t11*t31*t32/L + 0.08*E*I22*t11*t32**2/L - 0.08*E*I22*t12*t21**2/L + 0.04*E*I22*t12*t21*t22/L - 0.08*E*I22*t12*t22**2/L - 0.08*E*I22*t12*t31**2/L + 0.04*E*I22*t12*t31*t32/L - 0.08*E*I22*t12*t32**2/L + 1.2*E*I22*t11*u/L**2 - 1.2*E*I22*t12*u/L**2 + 0.08*E*I33*t11*t21**2/L - 0.04*E*I33*t11*t21*t22/L + 0.08*E*I33*t11*t22**2/L + 0.08*E*I33*t11*t31**2/L - 0.04*E*I33*t11*t31*t32/L + 0.08*E*I33*t11*t32**2/L - 0.08*E*I33*t12*t21**2/L + 0.04*E*I33*t12*t21*t22/L - 0.08*E*I33*t12*t22**2/L - 0.08*E*I33*t12*t31**2/L + 0.04*E*I33*t12*t31*t32/L - 0.08*E*I33*t12*t32**2/L + 1.2*E*I33*t11*u/L**2 - 1.2*E*I33*t12*u/L**2 + 1.02857142857155*E*Irr*t11**3/L**3 - 3.08571428571469*E*Irr*t11**2*t12/L**3 + 3.08571428571469*E*Irr*t11*t12**2/L**3 - 1.02857142857155*E*Irr*t12**3/L**3 + 1.2*G*I22*t11/L - 1.2*G*I22*t12/L + 1.2*G*I33*t11/L - 1.2*G*I33*t12/L - 0.308571428571553*E*I22**2*t11**3/(A*L**3) + 0.925714285714687*E*I22**2*t11**2*t12/(A*L**3) - 0.925714285714687*E*I22**2*t11*t12**2/(A*L**3) + 0.308571428571553*E*I22**2*t12**3/(A*L**3) - 0.617142857143106*E*I22*I33*t11**3/(A*L**3) + 1.85142857142937*E*I22*I33*t11**2*t12/(A*L**3) - 1.85142857142937*E*I22*I33*t11*t12**2/(A*L**3) + 0.617142857143106*E*I22*I33*t12**3/(A*L**3) - 0.308571428571553*E*I33**2*t11**3/(A*L**3) + 0.925714285714687*E*I33**2*t11**2*t12/(A*L**3) - 0.925714285714687*E*I33**2*t11*t12**2/(A*L**3) + 0.308571428571553*E*I33**2*t12**3/(A*L**3), 1.0*E*(0.00888888888888889*A*L**2*t21**3 - 0.00666666666666667*A*L**2*t21**2*t22 + 0.01*A*L**2*t21*t22**2 + 0.00888888888888889*A*L**2*t21*t31**2 - 0.00444444444444444*A*L**2*t21*t31*t32 + 0.00888888888888889*A*L**2*t21*t32**2 - 0.00222222222222222*A*L**2*t22**3 - 0.00222222222222222*A*L**2*t22*t31**2 + 0.00111111111111111*A*L**2*t22*t31*t32 - 0.00222222222222222*A*L**2*t22*t32**2 + 0.133333333333333*A*L*t21*u - 0.0333333333333333*A*L*t22*u + 0.08*I22*t11**2*t21 - 0.02*I22*t11**2*t22 - 0.16*I22*t11*t12*t21 + 0.04*I22*t11*t12*t22 + 0.08*I22*t12**2*t21 - 0.02*I22*t12**2*t22 + 0.08*I33*t11**2*t21 - 0.02*I33*t11**2*t22 - 0.16*I33*t11*t12*t21 + 0.04*I33*t11*t12*t22 + 0.08*I33*t12**2*t21 - 0.02*I33*t12**2*t22 + 4.0*I33*t21 + 2.0*I33*t22)/L, 1.0*E*(0.00888888888888889*A*L**2*t21**2*t31 - 0.00222222222222222*A*L**2*t21**2*t32 - 0.00444444444444444*A*L**2*t21*t22*t31 + 0.00111111111111111*A*L**2*t21*t22*t32 + 0.00888888888888889*A*L**2*t22**2*t31 - 0.00222222222222222*A*L**2*t22**2*t32 + 0.00888888888888889*A*L**2*t31**3 - 0.00666666666666667*A*L**2*t31**2*t32 + 0.01*A*L**2*t31*t32**2 - 0.00222222222222222*A*L**2*t32**3 + 0.133333333333333*A*L*t31*u - 0.0333333333333333*A*L*t32*u + 0.08*I22*t11**2*t31 - 0.02*I22*t11**2*t32 - 0.16*I22*t11*t12*t31 + 0.04*I22*t11*t12*t32 + 0.08*I22*t12**2*t31 - 0.02*I22 *
-                      t12**2*t32 + 4.0*I22*t31 + 2.0*I22*t32 + 0.08*I33*t11**2*t31 - 0.02*I33*t11**2*t32 - 0.16*I33*t11*t12*t31 + 0.04*I33*t11*t12*t32 + 0.08*I33*t12**2*t31 - 0.02*I33*t12**2*t32)/L, -0.08*E*I22*t11*t21**2/L + 0.04*E*I22*t11*t21*t22/L - 0.08*E*I22*t11*t22**2/L - 0.08*E*I22*t11*t31**2/L + 0.04*E*I22*t11*t31*t32/L - 0.08*E*I22*t11*t32**2/L + 0.08*E*I22*t12*t21**2/L - 0.04*E*I22*t12*t21*t22/L + 0.08*E*I22*t12*t22**2/L + 0.08*E*I22*t12*t31**2/L - 0.04*E*I22*t12*t31*t32/L + 0.08*E*I22*t12*t32**2/L - 1.2*E*I22*t11*u/L**2 + 1.2*E*I22*t12*u/L**2 - 0.08*E*I33*t11*t21**2/L + 0.04*E*I33*t11*t21*t22/L - 0.08*E*I33*t11*t22**2/L - 0.08*E*I33*t11*t31**2/L + 0.04*E*I33*t11*t31*t32/L - 0.08*E*I33*t11*t32**2/L + 0.08*E*I33*t12*t21**2/L - 0.04*E*I33*t12*t21*t22/L + 0.08*E*I33*t12*t22**2/L + 0.08*E*I33*t12*t31**2/L - 0.04*E*I33*t12*t31*t32/L + 0.08*E*I33*t12*t32**2/L - 1.2*E*I33*t11*u/L**2 + 1.2*E*I33*t12*u/L**2 - 1.02857142857155*E*Irr*t11**3/L**3 + 3.08571428571469*E*Irr*t11**2*t12/L**3 - 3.08571428571469*E*Irr*t11*t12**2/L**3 + 1.02857142857155*E*Irr*t12**3/L**3 - 1.2*G*I22*t11/L + 1.2*G*I22*t12/L - 1.2*G*I33*t11/L + 1.2*G*I33*t12/L + 0.308571428571553*E*I22**2*t11**3/(A*L**3) - 0.925714285714687*E*I22**2*t11**2*t12/(A*L**3) + 0.925714285714687*E*I22**2*t11*t12**2/(A*L**3) - 0.308571428571553*E*I22**2*t12**3/(A*L**3) + 0.617142857143106*E*I22*I33*t11**3/(A*L**3) - 1.85142857142937*E*I22*I33*t11**2*t12/(A*L**3) + 1.85142857142937*E*I22*I33*t11*t12**2/(A*L**3) - 0.617142857143106*E*I22*I33*t12**3/(A*L**3) + 0.308571428571553*E*I33**2*t11**3/(A*L**3) - 0.925714285714687*E*I33**2*t11**2*t12/(A*L**3) + 0.925714285714687*E*I33**2*t11*t12**2/(A*L**3) - 0.308571428571553*E*I33**2*t12**3/(A*L**3), E*(-0.00222222222222222*A*L**2*t21**3 + 0.01*A*L**2*t21**2*t22 - 0.00666666666666667*A*L**2*t21*t22**2 - 0.00222222222222222*A*L**2*t21*t31**2 + 0.00111111111111111*A*L**2*t21*t31*t32 - 0.00222222222222222*A*L**2*t21*t32**2 + 0.00888888888888889*A*L**2*t22**3 + 0.00888888888888889*A*L**2*t22*t31**2 - 0.00444444444444444*A*L**2*t22*t31*t32 + 0.00888888888888889*A*L**2*t22*t32**2 - 0.0333333333333333*A*L*t21*u + 0.133333333333333*A*L*t22*u - 0.02*I22*t11**2*t21 + 0.08*I22*t11**2*t22 + 0.04*I22*t11*t12*t21 - 0.16*I22*t11*t12*t22 - 0.02*I22*t12**2*t21 + 0.08*I22*t12**2*t22 - 0.02*I33*t11**2*t21 + 0.08*I33*t11**2*t22 + 0.04*I33*t11*t12*t21 - 0.16*I33*t11*t12*t22 - 0.02*I33*t12**2*t21 + 0.08*I33*t12**2*t22 + 2.0*I33*t21 + 4.0*I33*t22)/L, E*(-0.00222222222222222*A*L**2*t21**2*t31 + 0.00888888888888889*A*L**2*t21**2*t32 + 0.00111111111111111*A*L**2*t21*t22*t31 - 0.00444444444444444*A*L**2*t21*t22*t32 - 0.00222222222222222*A*L**2*t22**2*t31 + 0.00888888888888889*A*L**2*t22**2*t32 - 0.00222222222222222*A*L**2*t31**3 + 0.01*A*L**2*t31**2*t32 - 0.00666666666666667*A*L**2*t31*t32**2 + 0.00888888888888889*A*L**2*t32**3 - 0.0333333333333333*A*L*t31*u + 0.133333333333333*A*L*t32*u - 0.02*I22*t11**2*t31 + 0.08*I22*t11**2*t32 + 0.04*I22*t11*t12*t31 - 0.16*I22*t11*t12*t32 - 0.02*I22*t12**2*t31 + 0.08*I22*t12**2*t32 + 2.0*I22*t31 + 4.0*I22*t32 - 0.02*I33*t11**2*t31 + 0.08*I33*t11**2*t32 + 0.04*I33*t11*t12*t31 - 0.16*I33*t11*t12*t32 - 0.02*I33*t12**2*t31 + 0.08*I33*t12**2*t32)/L]]).T
-
-        return fl
+        return kl, fl
 
     def strain(self, x, y, z):
-        u, t11, t21, t31, t12, t22, t32 = self.local_displacement.reshape(7)
+        u, t11, t21, t31, t12, t22, t32 = self.local_displacement().reshape(7)
         L = self.initial_length
 
-        # Hermitian polynomials and their derivatives
+        # Shape functions and their derivatives
         def f1(x): return 1 - 3 * (x/L) ** 2 + 2 * (x/L) ** 3
         def f2(x): return x * (1 - x/L) ** 2
         def f3(x): return 1 - f1(x)
         def f4(x): return (x ** 2) * (x/L - 1) / L
-        def f5(x): return x/L
+        def f5(x): return 1 - x/L
+        def f6(x): return x/L
 
         def df1(x): return -6*x/L**2 + 6*x**2/L**3
         def df2(x): return (1 - x/L)**2 - 2*x*(1 - x/L)/L
         def df3(x): return 6*x/L**2 - 6*x**2/L**3
         def df4(x): return 2*x*(-1 + x/L)/L + x**2/L**2
-        def df5(x): return 1/L
+        def df5(x): return -1/L
+        def df6(x): return 1/L
 
         def ddf1(x): return -6/L**2 + 12*x/L**3
         def ddf2(x): return -4*(1 - x/L)/L + 2*x/L**2
         def ddf3(x): return 6/L**2 - 12*x/L**3
         def ddf4(x): return 2*(-1 + x/L)/L + 4*x/L**2
         def ddf5(x): return 0
+        def ddf6(x): return 0
 
-        u1 = f5(x) * u
-        u2 = f2(x) * t31 + f4(x) * t32
-        u3 = -f2(x) * t21 - f4(x) * t22
+        if self.beamtype == "Bernoulli":
+            # u1 = f6(x) * u
+            # u2 = f2(x) * t31 + f4(x) * t32
+            # u3 = -f2(x) * t21 - f4(x) * t22
 
-        du1 = df5(x) * u
-        du2 = df2(x) * t31 + df4(x) * t32
-        du3 = -df2(x) * t21 - df4(x) * t22
+            du1 = df6(x) * u
+            du2 = df2(x) * t31 + df4(x) * t32
+            du3 = -df2(x) * t21 - df4(x) * t22
 
-        ddu1 = ddf5(x) * u
-        ddu2 = ddf2(x) * t31 + ddf4(x) * t32
-        ddu3 = -ddf2(x) * t21 - ddf4(x) * t22
+            ddu1 = ddf6(x)
+            ddu2 = ddf2(x) * t31 + ddf4(x) * t32
+            ddu3 = -ddf2(x) * t21 - ddf4(x) * t22
 
-        t1 = f1(x) * t11 + f3(x) * t12
-        t2 = -du3 + du2 * t1 / 2 + du1 * du3
-        t3 = du2 + du3 * t1 / 2 - du1 * du2
+            t1 = f5(x) * t11 + f6(x) * t12
+            t2 = -du3  # + du2 * t1 / 2 + du1 * du3
+            t3 = du2  # + du3 * t1 / 2 - du1 * du2
 
-        dt1 = df1(x) * t11 + df3(x) * t12
-        dt2 = -ddu3 + (ddu2 * t1 + du2 * dt1) / 2 + ddu1 * du3 + du1 * ddu3
-        dt3 = ddu2 + (ddu3 * t1 + du3 * dt1) / 2 - ddu1 * du2 - du1 * ddu2
+            dt1 = df5(x) * t11 + df6(x) * t12
+            dt2 = -ddu3
+            dt3 = ddu2
+
+        elif self.beamtype == "Timoshenko":
+            du1 = u / L
+            du2 = 0.0
+            du3 = 0.0
+
+            ddu2 = 0.0
+            ddu3 = 0.0
+
+            t1 = f5(x) * t11 + f6(x) * t12
+            t2 = f5(x) * t21 + f6(x) * t22
+            t3 = f5(x) * t31 + f6(x) * t32
+
+            dt1 = (t12 - t11) / L
+            dt2 = (t22 - t21) / L
+            dt3 = (t32 - t31) / L
 
         eps_11 = du1 + (du2 ** 2 + du3 ** 2) / 2 - y * dt3 + \
             z * dt2 + (y ** 2 + z ** 2) * dt1 ** 2 / 2
@@ -771,114 +338,76 @@ class CorotationalBeamElement3D():
 
     def map_local_coordinate_to_global_coordinate(self, xi, eta, mu):
         x = self.initial_length / 2 * (xi + 1)
-        y = self.__width / 2 * eta
-        z = self.__height / 2 * mu
+        y = self.width / 2 * eta
+        z = self.height / 2 * mu
 
         return x, y, z
 
     def perform_linear_hardening(self):
-        gauss_locations_xi = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_xi)[0]
-        gauss_locations_eta = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_eta)[0]
-        gauss_locations_mu = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_mu)[0]
-
-        beta = 1.0
 
         def yield_stress_function(
-            alpha): return self.__yield_stress + beta * self.__plastic_modulus * alpha
+            alpha): return self.yield_stress + self.plastic_modulus * alpha
 
-        def stress_norm(stress): return np.sqrt(stress[0, 0] ** 2 +
-                                                stress[1, 0] ** 2 +
-                                                stress[2, 0] ** 2 +
-                                                2 * stress[3, 0] ** 2 +
-                                                2 * stress[4, 0] ** 2 +
-                                                2 * stress[5, 0] ** 2)
+        elastic_tangent_moduli = self.first_lame_constant * util.unit_tensor() @ util.unit_tensor().T + \
+            2 * self.second_lame_constant * np.eye(6)
 
-        for ixi in range(self.__num_of_gauss_locations_xi):
-            for jeta in range(self.__num_of_gauss_locations_eta):
-                for kmu in range(self.__num_of_gauss_locations_mu):
-                    x, y, z = self.map_local_coordinate_to_global_coordinate(
-                        gauss_locations_xi[ixi], gauss_locations_eta[jeta], gauss_locations_mu[kmu])
+        for n in range(self.num_of_gauss_locations):
+            x, y, z = self.global_gauss_locations_mat[0,
+                                                      n], self.global_gauss_locations_mat[1, n], self.global_gauss_locations_mat[2, n]
 
-                    constitutive_matrix = self.first_lame_constant * \
-                        util.unit_tensor() @ util.unit_tensor().T + 2 * \
-                        self.second_lame_constant * np.eye(6)
+            strain_trial = self.strain(x, y, z) - self.plastic_strain[:, :, n]
 
-                    strain_dev = self.strain(
-                        x, y, z) - 1/3 * util.trace(self.strain(x, y, z)) * util.unit_tensor()
+            volumetric_strain_trial, deviatoric_strain_trial = util.decompose_strain(
+                strain_trial)
 
-                    stress_dev_trial = 2 * self.second_lame_constant * \
-                        (strain_dev -
-                         self.__plastic_strain[:, :, ixi, jeta, kmu])
+            p_trial = self.bulk_modulus * volumetric_strain_trial
+            s_trial = 2 * self.second_lame_constant * deviatoric_strain_trial
+            q_trial = np.sqrt(3/2) * util.stress_norm(s_trial)
 
-                    relative_stress_trial = stress_dev_trial - \
-                        self.__back_stress[:, :, ixi, jeta, kmu]
+            f_trial = q_trial - \
+                yield_stress_function(self.internal_hardening_variable[n])
 
-                    yield_condition_trial = stress_norm(relative_stress_trial) - np.sqrt(
-                        2/3) * yield_stress_function(self.__internal_hardening_variable[ixi, jeta, kmu])
+            if f_trial <= 0:
+                self.stress[:, :, n] = s_trial + p_trial * util.unit_tensor()
+                self.tangent_moduli[:, :, n] = elastic_tangent_moduli
+            else:
+                deltagamma = f_trial / \
+                    (self.plastic_modulus + 3 * self.second_lame_constant)
 
-                    if yield_condition_trial <= 0:
-                        self.__stress[:, :, ixi, jeta, kmu] = constitutive_matrix @ (
-                            self.strain(x, y, z) - self.__plastic_strain[:, :, ixi, jeta, kmu])
-                        self.__tangent_moduli[:, :, ixi,
-                                              jeta, kmu] = constitutive_matrix
+                s = (1 - deltagamma * 3 *
+                     self.second_lame_constant / q_trial) * s_trial
+                self.stress[:, :, n] = s + p_trial * util.unit_tensor()
+                self.plastic_strain[:, :, n] += deltagamma * \
+                    np.sqrt(3/2) * s / util.stress_norm(s)
+                self.internal_hardening_variable[n] += deltagamma
 
-                    else:
-                        deltagamma = yield_condition_trial / \
-                            (2 * self.second_lame_constant +
-                             2/3 * self.__plastic_modulus)
-
-                        unit_relative_stress = relative_stress_trial / \
-                            stress_norm(relative_stress_trial)
-
-                        self.__stress[:, :, ixi, jeta, kmu] = self.bulk_modulus * util.trace(self.strain(x, y, z)) * util.unit_tensor(
-                        ) + stress_dev_trial - 2 * self.second_lame_constant * deltagamma * unit_relative_stress
-                        self.__back_stress[:, :, ixi, jeta, kmu] += 2/3 * (
-                            1 - beta) * self.plastic_modulus * deltagamma * unit_relative_stress
-                        self.__plastic_strain[:, :, ixi, jeta,
-                                              kmu] += deltagamma * unit_relative_stress
-                        self.__internal_hardening_variable[ixi,
-                                                           jeta, kmu] += np.sqrt(2/3) * deltagamma
-
-                        theta = 1 - 2 * self.second_lame_constant * \
-                            deltagamma / stress_norm(relative_stress_trial)
-                        theta_bar = 1 / (1 + (yield_stress_function(self.__internal_hardening_variable[ixi, jeta, kmu]) + (
-                            1 - beta) * self.plastic_modulus) / (3 * self.second_lame_constant)) - (1 - theta)
-                        tangent_moduli = self.bulk_modulus * util.unit_tensor() @ util.unit_tensor().T + 2 * self.second_lame_constant * theta * (np.eye(6) - 1 /
-                                                                                                                                                  3 * util.unit_tensor() @ util.unit_tensor().T) - 2 * self.second_lame_constant * theta_bar * unit_relative_stress @ unit_relative_stress.T
-                        self.__tangent_moduli[:, :, ixi,
-                                              jeta, kmu] = tangent_moduli
+                unit_flow_vec = s_trial / util.stress_norm(s_trial)
+                self.tangent_moduli[:, :, n] = 2 * self.second_lame_constant * (1 - deltagamma * 3 * self.second_lame_constant / q_trial) * util.deviatoric_projection_tensor() + 6 * self.second_lame_constant ** 2 * (
+                    deltagamma / q_trial - 1 / (3 * self.second_lame_constant + self.plastic_modulus)) * unit_flow_vec @ unit_flow_vec.T + self.bulk_modulus * util.unit_tensor() @ util.unit_tensor().T
 
     def L_matrix(self):
-        gauss_locations_xi = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_xi)[0]
-        gauss_locations_eta = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_eta)[0]
-        gauss_locations_mu = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_mu)[0]
-        L = np.zeros((6, 6, self.__num_of_gauss_locations_xi,
-                     self.__num_of_gauss_locations_eta, self.__num_of_gauss_locations_mu), dtype=float)
-        for ixi in range(self.__num_of_gauss_locations_xi):
-            for jeta in range(self.__num_of_gauss_locations_eta):
-                for kmu in range(self.__num_of_gauss_locations_mu):
-                    x, y, z = self.map_local_coordinate_to_global_coordinate(
-                        gauss_locations_xi[ixi], gauss_locations_eta[jeta], gauss_locations_mu[kmu])
-                    L[3, 3, ixi, jeta, kmu] = (
-                        y ** 2 + z ** 2) * self.__stress[0, 0, ixi, jeta, kmu]
+        L = np.zeros((6, 6, self.num_of_gauss_locations), dtype=float)
+        eta = -self.first_lame_constant / \
+            (2 * (self.first_lame_constant +
+             self.second_lame_constant))
+        for n in range(self.num_of_gauss_locations):
+            y, z = self.global_gauss_locations_mat[1: 3, n]
+            L[3, 3, n] = (y ** 2 + z ** 2) * self.stress[0, 0, n] + eta * (y ** 2 + z ** 2) * \
+                self.stress[1, 0, n] + eta * \
+                (y ** 2 + z ** 2) * self.stress[2, 0, n]
 
         return L
 
-    def A_matrix(self, x, y, z):
-        t12, t11 = self.local_displacement[4, 0], self.local_displacement[1, 0]
+    def A_matrix(self, y, z):
+        p_l = self.local_displacement()
+        t12, t11 = p_l[4, 0], p_l[1, 0]
         L = self.initial_length
 
-        def df1(x): return -6*x/L**2 + 6*x**2/L**3
-        def df3(x): return 6*x/L**2 - 6*x**2/L**3
+        # def df1(x): return -6*x/L**2 + 6*x**2/L**3
+        # def df3(x): return 6*x/L**2 - 6*x**2/L**3
 
-        def dt1(x): return df1(x) * t11 + df3(x) * t12
-        A = np.array([[1., 0., 0., (y ** 2 + z ** 2) * dt1(x), z, -y],
+        # def dt1(x): return -1/L * t11 + 1/L * t12
+        A = np.array([[1., 0., 0., (y ** 2 + z ** 2) * (t12 - t11)/L, z, -y],
                       [0., 0., 0., 0., 0., 0.],
                       [0., 0., 0., 0., 0., 0.],
                       [0., -1., 0., -z, 0., 0.],
@@ -891,96 +420,76 @@ class CorotationalBeamElement3D():
         return A
 
     def G_mat(self, x):
-        u, t11, t21, t31, t12, t22, t32 = self.local_displacement.reshape(7)
+
         L = self.initial_length
 
-        def f1(x): return 1 - 3 * (x/L) ** 2 + 2 * (x/L) ** 3
-        def f2(x): return x * (1 - x/L) ** 2
-        def f3(x): return 1 - f1(x)
-        def f4(x): return (x ** 2) * (x/L - 1) / L
-        def f5(x): return x/L
+        # def f1(x): return 1 - 3 * (x/L) ** 2 + 2 * (x/L) ** 3
+        # def f2(x): return x * (1 - x/L) ** 2
+        # def f3(x): return 1 - f1(x)
+        # def f4(x): return (x ** 2) * (x/L - 1) / L
+        def f5(x): return 1 - x/L
+        def f6(x): return x/L
 
-        def df1(x): return -6*x/L**2 + 6*x**2/L**3
+        # def df1(x): return -6*x/L**2 + 6*x**2/L**3
         def df2(x): return (1 - x/L)**2 - 2*x*(1 - x/L)/L
-        def df3(x): return 6*x/L**2 - 6*x**2/L**3
+        # def df3(x): return 6*x/L**2 - 6*x**2/L**3
         def df4(x): return 2*x*(-1 + x/L)/L + x**2/L**2
-        def df5(x): return 1/L
+        def df5(x): return -1/L
+        def df6(x): return 1/L
 
-        def ddf1(x): return -6/L**2 + 12*x/L**3
+        # def ddf1(x): return -6/L**2 + 12*x/L**3
         def ddf2(x): return -4*(1 - x/L)/L + 2*x/L**2
-        def ddf3(x): return 6/L**2 - 12*x/L**3
+        # def ddf3(x): return 6/L**2 - 12*x/L**3
         def ddf4(x): return 2*(-1 + x/L)/L + 4*x/L**2
-        def ddf5(x): return 0
+        # def ddf5(x): return 0
+        # def ddf6(x): return 0
 
-        def pdu1(x): return np.array([[df5(x), 0, 0, 0, 0, 0, 0]])
-
-        def pt3(x): return np.array([[-df5(x)*(df2(x)*t31 + df4(x)*t32), f1(x)*(-0.5*df2(x)*t21 - 0.5*df4(x)*t22), -0.5*df2(x)*(f1(x)*t11 + f3(
-            x)*t12), -df2(x)*df5(x)*u + df2(x), f3(x)*(-0.5*df2(x)*t21 - 0.5*df4(x)*t22), -0.5*df4(x)*(f1(x)*t11 + f3(x)*t12), -df4(x)*df5(x)*u + df4(x)]])
-        def pt2(x): return np.array([[df5(x)*(-df2(x)*t21 - df4(x)*t22), f1(x)*(0.5*df2(x)*t31 + 0.5*df4(x)*t32), -df2(x)*df5(x)*u + df2(x), 0.5*df2(
-            x)*(f1(x)*t11 + f3(x)*t12), f3(x)*(0.5*df2(x)*t31 + 0.5*df4(x)*t32), -df4(x)*df5(x)*u + df4(x), 0.5*df4(x)*(f1(x)*t11 + f3(x)*t12)]])
-
-        def pdt1(x): return np.array([[0, df1(x), 0, 0, df3(x), 0, 0]])
-
-        def pdt2(x): return np.array([[ddf5(x)*(-df2(x)*t21 - df4(x)*t22) + df5(x)*(-ddf2(x)*t21 - ddf4(x)*t22), f1(x)*(0.5*ddf2(x)*t31 + 0.5*ddf4(x)*t32), -ddf2(x)*df5(x)*u + ddf2(x) - ddf5(
-            x)*df2(x)*u, 0.5*ddf2(x)*(f1(x)*t11 + f3(x)*t12), f3(x)*(0.5*ddf2(x)*t31 + 0.5*ddf4(x)*t32), -ddf4(x)*df5(x)*u + ddf4(x) - ddf5(x)*df4(x)*u, 0.5*ddf4(x)*(f1(x)*t11 + f3(x)*t12)]])
-        def pdt3(x): return np.array([[-ddf5(x)*(df2(x)*t31 + df4(x)*t32) - df5(x)*(ddf2(x)*t31 + ddf4(x)*t32), f1(x)*(-0.5*ddf2(x)*t21 - 0.5*ddf4(x)*t22), -0.5*ddf2(x)*(f1(x)*t11 + f3(x)*t12), -ddf2(
-            x)*df5(x)*u + ddf2(x) - ddf5(x)*df2(x)*u, f3(x)*(-0.5*ddf2(x)*t21 - 0.5*ddf4(x)*t22), -0.5*ddf4(x)*(f1(x)*t11 + f3(x)*t12), -ddf4(x)*df5(x)*u + ddf4(x) - ddf5(x)*df4(x)*u]])
-
-        G = np.r_[pdu1(x), pt3(x), pt2(x), pdt1(x), pdt2(x), pdt3(x)]
-
+        if self.beamtype == "Bernoulli":
+            G = np.zeros((6, 7), dtype=float)
+            G[0, 0] = 1/L
+            G[1, 3], G[2, 2] = df2(x), df2(x)
+            G[1, 6], G[2, 5] = df4(x), df4(x)
+            G[3, 1], G[4, 2], G[5, 3] = df5(x), ddf2(x), ddf2(x)
+            G[3, 4], G[4, 5], G[5, 6] = df6(x), ddf4(x), ddf4(x)
+        elif self.beamtype == "Timoshenko":
+            G = np.zeros((6, 7), dtype=float)
+            G[0, 0] = 1/L
+            G[1, 3], G[2, 2] = f5(x), f5(x)
+            G[1, 6], G[2, 5] = f6(x), f6(x)
+            G[3, 1], G[4, 2], G[5, 3] = -1/L, -1/L, -1/L
+            G[3, 4], G[4, 5], G[5, 6] = 1/L, 1/L, 1/L
         return G
 
-    @property
-    def elasto_plastic_local_force(self):
-        [gauss_locations_xi, weights_xi] = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_xi)
-        [gauss_locations_eta, weights_eta] = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_eta)
-        [gauss_locations_mu, weights_mu] = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_mu)
-
-        f_l = np.zeros((7, 1), dtype=float)
-
-        for ixi in range(self.__num_of_gauss_locations_xi):
-            for jeta in range(self.__num_of_gauss_locations_eta):
-                for kmu in range(self.__num_of_gauss_locations_mu):
-                    x, y, z = self.map_local_coordinate_to_global_coordinate(
-                        gauss_locations_xi[ixi], gauss_locations_eta[jeta], gauss_locations_mu[kmu])
-                    fac = self.initial_length * self.__width * self.__height / 8
-                    wt = weights_xi[ixi] * weights_eta[jeta] * weights_mu[kmu]
-                    f_l += self.G_mat(x).T @ self.A_matrix(x, y,
-                                                           z).T @ self.__stress[:, :, ixi, jeta, kmu] * fac * wt
-
-        return f_l
-
-    @property
-    def elasto_plastic_local_stiffness(self):
-        [gauss_locations_xi, weights_xi] = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_xi)
-        [gauss_locations_eta, weights_eta] = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_eta)
-        [gauss_locations_mu, weights_mu] = np.polynomial.legendre.leggauss(
-            self.__num_of_gauss_locations_mu)
-
+    def elasto_plastic_local_stiffness_force(self):
         k_l = np.zeros((7, 7), dtype=float)
+        f_l = np.zeros((7, 1), dtype=float)
+        # L = self.L_matrix()
 
-        for ixi in range(self.__num_of_gauss_locations_xi):
-            for jeta in range(self.__num_of_gauss_locations_eta):
-                for kmu in range(self.__num_of_gauss_locations_mu):
-                    x, y, z = self.map_local_coordinate_to_global_coordinate(
-                        gauss_locations_xi[ixi], gauss_locations_eta[jeta], gauss_locations_mu[kmu])
-                    fac = self.initial_length * self.__width * self.__height / 8
-                    wt = weights_xi[ixi] * weights_eta[jeta] * weights_mu[kmu]
-                    k_l += self.G_mat(x).T @ (self.A_matrix(x, y, z).T @ self.__tangent_moduli[:, :, ixi, jeta, kmu] @ self.A_matrix(
-                        x, y, z) + self.L_matrix()[:, :, ixi, jeta, kmu]) @ self.G_mat(x) * fac * wt
+        L = np.zeros((6, 6, self.num_of_gauss_locations), dtype=float)
+        eta = -self.first_lame_constant / \
+            (2 * (self.first_lame_constant +
+             self.second_lame_constant))
 
-        return k_l
+        for n in range(self.num_of_gauss_locations):
+            x, y, z = self.global_gauss_locations_mat[0: 3, n]
+            G = self.G_mat(x)
+            A = self.A_matrix(y, z)
 
-    @property
+            L[3, 3, n] = (y ** 2 + z ** 2) * self.stress[0, 0, n] + eta * (y ** 2 + z ** 2) * \
+                self.stress[1, 0, n] + eta * \
+                (y ** 2 + z ** 2) * self.stress[2, 0, n]
+
+            fac = self.initial_length * self.width * self.height / 8
+            k_l += G.T @ (A.T @ self.tangent_moduli[:, :, n] @ A + L[
+                          :, :, n]) @ G * fac * self.weights_mat[n]
+            f_l += G.T @ A.T @ self.stress[:, :, n] * fac * self.weights_mat[n]
+
+        return k_l, f_l
+
     def Ba_matrix(self):
-        p_l = self.local_displacement
-        T_s_inv_theta_1bar = util.getTransformation(p_l[1: 4], 'inv')
-        T_s_inv_theta_2bar = util.getTransformation(p_l[4: 7], 'inv')
+        p_l = self.local_displacement()
+        T_s_inv_theta_1bar = util.get_transformation_inv(p_l[1: 4])
+        T_s_inv_theta_2bar = util.get_transformation_inv(p_l[4: 7])
 
         B_a = np.zeros((7, 7), dtype=float)
         B_a[0, 0] = 1.
@@ -989,66 +498,57 @@ class CorotationalBeamElement3D():
 
         return B_a
 
-    @property
-    def local_force_a(self):
+    def a_stiffness_force(self):
+        B_a = self.Ba_matrix()
+
         if self.analysis == "elastic":
-            return self.Ba_matrix.T @ self.local_force
+            k_l, f_l = self.local_stiffness_force()
+
         else:
-            return self.Ba_matrix.T @ self.elasto_plastic_local_force
+            k_l, f_l = self.elasto_plastic_local_stiffness_force()
 
-    def Khi_matrix(self, i):
-        if i == 1:
-            theta_bar = self.local_displacement[1: 4]
-            if self.analysis == "elastic":
-                v = self.local_force[1: 4]
-            else:
-                v = self.elasto_plastic_local_force[1: 4]
-        elif i == 2:
-            theta_bar = self.local_displacement[4: 7]
-            if self.analysis == "elastic":
-                v = self.local_force[4: 7]
-            else:
-                v = self.elasto_plastic_local_force[4: 7]
-        else:
-            raise ValueError("Wrong value of i!")
+        p_l = self.local_displacement()
+        theta_bar_1 = p_l[1: 4]
+        theta_bar_2 = p_l[4: 7]
 
-        alpha = np.linalg.norm(theta_bar)
-        eta, mu = util.getEtaAndMu(alpha)
-        theta_bar_tilde = util.getSkewSymmetric(theta_bar)
-        v_tilde = util.getSkewSymmetric(v)
-        T_s_inv = util.getTransformation(theta_bar, 'inv')
+        v_1 = f_l[1: 4]
+        v_2 = f_l[4: 7]
 
-        K_hi = (eta * (theta_bar @ v.T - 2 * v @ theta_bar.T + float(theta_bar.T @ v) * np.eye(3))
-                + mu * theta_bar_tilde @ theta_bar_tilde @ (v @ theta_bar.T) - 1/2 * v_tilde) @ T_s_inv
+        alpha_1, theta_bar_tilde_1 = util.decompose_rotational_vector(
+            theta_bar_1)
+        eta_1, mu_1 = util.get_eta_and_mu(alpha_1)
+        v_tilde_1 = util.get_skew_symmetric(v_1)
+        T_s_inv_1 = util.get_transformation_inv(theta_bar_1)
 
-        return K_hi
+        K_h1 = (eta_1 * (theta_bar_1 @ v_1.T - 2 * v_1 @ theta_bar_1.T + float(theta_bar_1.T @ v_1) * np.eye(3))
+                + mu_1 * theta_bar_tilde_1 @ theta_bar_tilde_1 @ (v_1 @ theta_bar_1.T) - 1/2 * v_tilde_1) @ T_s_inv_1
 
-    @property
-    def Kh_matrix(self):
+        alpha_2, theta_bar_tilde_2 = util.decompose_rotational_vector(
+            theta_bar_2)
+        eta_2, mu_2 = util.get_eta_and_mu(alpha_2)
+        v_tilde_2 = util.get_skew_symmetric(v_2)
+        T_s_inv_2 = util.get_transformation_inv(theta_bar_2)
+
+        K_h2 = (eta_2 * (theta_bar_2 @ v_2.T - 2 * v_2 @ theta_bar_2.T + float(theta_bar_2.T @ v_2) * np.eye(3))
+                + mu_2 * theta_bar_tilde_2 @ theta_bar_tilde_2 @ (v_2 @ theta_bar_2.T) - 1/2 * v_tilde_2) @ T_s_inv_2
+
         K_h = np.zeros((7, 7), dtype=float)
-        K_h[1: 4, 1: 4] = self.Khi_matrix(1)
-        K_h[4: 7, 4: 7] = self.Khi_matrix(2)
+        K_h[1: 4, 1: 4] = K_h1
+        K_h[4: 7, 4: 7] = K_h2
 
-        return K_h
+        K_a = B_a.T @ k_l @ B_a + K_h
+        f_a = B_a.T @ f_l
 
-    @property
-    def Ka_matrix(self):
-        if self.__analysis == "elastic":
-            return self.Ba_matrix.T @ self.local_stiffness_matrix @ self.Ba_matrix + self.Kh_matrix
-        else:
-            return self.Ba_matrix.T @ self.elasto_plastic_local_stiffness @ self.Ba_matrix + self.Kh_matrix
+        return K_a, f_a
 
-    @property
     def G_matrix(self):
 
-        q_1, q_2, q = self.auxiliary_vector
+        q_1, q_2, q = self.auxiliary_vector()
+        R_g = self.current_local_frame()
 
-        q1 = float((self.current_local_frame.T @ q)[0])
-        q2 = float((self.current_local_frame.T @ q)[1])
-        q11 = float((self.current_local_frame.T @ q_1)[0])
-        q12 = float((self.current_local_frame.T @ q_1)[1])
-        q21 = float((self.current_local_frame.T @ q_2)[0])
-        q22 = float((self.current_local_frame.T @ q_2)[1])
+        q1, q2 = (R_g.T @ q)[0: 2]
+        q11, q12 = (R_g.T @ q_1)[0: 2]
+        q21, q22 = (R_g.T @ q_2)[0: 2]
 
         eta = q1 / q2
         eta_11 = q11 / q2
@@ -1056,120 +556,149 @@ class CorotationalBeamElement3D():
         eta_21 = q21 / q2
         eta_22 = q22 / q2
 
+        l = self.current_length()
+
         G = np.array([
-            [0, 0, eta/self.current_length, eta_12/2, -eta_11/2, 0, 0,
-                0, -eta/self.current_length, eta_22/2, -eta_21/2, 0],
-            [0, 0, 1/self.current_length, 0, 0, 0,
-             0, 0, -1/self.current_length, 0, 0, 0],
-            [0, -1/self.current_length, 0, 0, 0, 0,
-             0, 1/self.current_length, 0, 0, 0, 0]], dtype=float).T
+            [0, 0, eta/l, eta_12/2, -eta_11/2, 0, 0,
+                0, -eta/l, eta_22/2, -eta_21/2, 0],
+            [0, 0, 1/l, 0, 0, 0,
+             0, 0, -1/l, 0, 0, 0],
+            [0, -1/l, 0, 0, 0, 0,
+             0, 1/l, 0, 0, 0, 0]], dtype=float).T
 
         return G
 
-    @property
-    def E_matrix(self):
+    def r_vector(self):
 
+        r_1 = (self.current_coordinate_node_2() -
+               self.current_coordinate_node_1()) / self.current_length()
+        r = np.zeros((1, 12), dtype=float)
+        r[:, 0: 3], r[:, 6: 9] = -r_1.T, r_1.T
+        return r
+
+    def P_matrix(self):
+
+        G = self.G_matrix()
+
+        temp1, temp2 = np.zeros((6, 12), dtype=float), np.zeros(
+            (6, 12), dtype=float)
+        temp1[0: 3, 3: 6], temp1[3: 6, 9: 12] = np.eye(3), np.eye(3)
+
+        temp2[0: 3, :], temp2[3: 6, :] = G.T, G.T
+
+        return temp1 - temp2
+
+    def E_matrix(self):
         E = np.zeros((12, 12), dtype=float)
-        E[0: 3, 0: 3] = self.current_local_frame
-        E[3: 6, 3: 6] = self.current_local_frame
-        E[6: 9, 6: 9] = self.current_local_frame
-        E[9: 12, 9: 12] = self.current_local_frame
+        R_g = self.current_local_frame()
+
+        E[0: 3, 0: 3] = R_g
+        E[3: 6, 3: 6] = R_g
+        E[6: 9, 6: 9] = R_g
+        E[9: 12, 9: 12] = R_g
 
         return E
 
-    @property
-    def r_vector(self):
-
-        r_1 = (self.current_coordinate_node_2 -
-               self.current_coordinate_node_1) / self.current_length
-        r = np.c_[-r_1.T, np.array([[0., 0., 0.]]),
-                  r_1.T, np.array([[0., 0., 0.]])]
-        return r
-
-    @property
-    def P_matrix(self):
-
-        P = np.r_[np.c_[np.zeros((3, 3), dtype=float),
-                        np.eye(3),
-                        np.zeros((3, 3), dtype=float),
-                        np.zeros((3, 3), dtype=float)],
-                  np.c_[np.zeros((3, 3), dtype=float),
-                        np.zeros((3, 3), dtype=float),
-                        np.zeros((3, 3), dtype=float),
-                        np.eye(3)]] - np.r_[self.G_matrix.T, self.G_matrix.T]
-
-        return P
-
-    @property
     def Bg_matrix(self):
+        return np.r_[self.r_vector(), self.P_matrix() @ self.E_matrix().T]
 
-        return np.r_[self.r_vector, self.P_matrix @ self.E_matrix.T]
+    def global_stiffness_force(self):
+        B_g = self.Bg_matrix()
 
-    @property
-    def global_force(self):
-        return self.Bg_matrix.T @ self.local_force_a
+        K_a, f_a = self.a_stiffness_force()
 
-    @property
-    def D_matrix(self):
-        r_1 = (self.current_coordinate_node_2 -
-               self.current_coordinate_node_1) / self.current_length
-        D_3 = 1/self.current_length * (np.eye(3) - r_1 @ r_1.T)
+        l = self.current_length()
+        r_1 = (self.current_coordinate_node_2() -
+               self.current_coordinate_node_1()) / l
+        R_g = self.current_local_frame()
+        G = self.G_matrix()
+        r = self.r_vector()
 
+        # -----------------------------------------
+        # D_mat
+        D_3 = 1/l * (np.eye(3) - r_1 @ r_1.T)
         D = np.zeros((12, 12), dtype=float)
+
         D[0: 3, 0: 3] = D_3
         D[0: 3, 6: 9] = -D_3
         D[6: 9, 0: 3] = -D_3
         D[6: 9, 6: 9] = D_3
+        # -----------------------------------------
+        # E_mat
+        E = np.zeros((12, 12), dtype=float)
 
-        return D
+        E[0: 3, 0: 3] = R_g
+        E[3: 6, 3: 6] = R_g
+        E[6: 9, 6: 9] = R_g
+        E[9: 12, 9: 12] = R_g
+        # -----------------------------------------
+        # Q_mat
+        P = self.P_matrix()
+        temp = P.T @ f_a[1: 7]
 
-    @property
-    def a_vector(self):
+        n_1, m_1, n_2, m_2 = temp[0: 3], temp[3: 6], temp[6: 9], temp[9: 12]
 
-        f_a = self.local_force_a
-        _, _, q = self.auxiliary_vector
-        q1 = float((self.current_local_frame.T @ q)[0, 0])
-        q2 = float((self.current_local_frame.T @ q)[1, 0])
-        eta = q1 / q2
+        Q = np.zeros((12, 3), dtype=float)
+        Q[0: 3, 0: 3] = util.get_skew_symmetric(n_1)
+        Q[3: 6, 0: 3] = util.get_skew_symmetric(m_1)
+        Q[6: 9, 0: 3] = util.get_skew_symmetric(n_2)
+        Q[9: 12, 0: 3] = util.get_skew_symmetric(m_2)
 
-        a = np.zeros((3, 1), dtype=float)
-        a[1] = eta/self.current_length * (f_a[1] + f_a[4]) - \
-            1/self.current_length * \
-            (f_a[2] + f_a[5])
-        a[2] = 1/self.current_length * \
-            (f_a[3] + f_a[6])
+        # -----------------------------------------
+        # a_vec
+        eta = float(G[2, 0]) * l
+        a = np.array([[0.0, float(eta/l * (f_a[1] + f_a[4]) - 1 /
+                     l * (f_a[2] + f_a[5])), float(1/l * (f_a[3] + f_a[6]))]]).T
+        # -----------------------------------------
+        # K_mmat
+        K_m = D * f_a[0] - E @ Q @ G.T @ E.T + E @ G @ a @ r
+        # -----------------------------------------
 
-        return a
+        K_g = B_g.T @ K_a @ B_g + K_m
+        f_g = B_g.T @ f_a
 
-    @property
-    def Q_matrix(self):
+        return K_g, f_g
 
-        f_a = self.local_force_a
+    def global_stiffness_force_r(self):
 
-        n_1 = (self.P_matrix.T @ f_a[1: 7])[0: 3]
-        m_1 = (self.P_matrix.T @ f_a[1: 7])[3: 6]
-        n_2 = (self.P_matrix.T @ f_a[1: 7])[6: 9]
-        m_2 = (self.P_matrix.T @ f_a[1: 7])[9: 12]
+        K_g, f_g = self.global_stiffness_force()
 
-        n_1tilde = util.getSkewSymmetric(n_1)
-        m_1tilde = util.getSkewSymmetric(m_1)
-        n_2tilde = util.getSkewSymmetric(n_2)
-        m_2tilde = util.getSkewSymmetric(m_2)
+        theta_1_vec = self.incremental_global_displacement[3: 6]
+        theta_2_vec = self.incremental_global_displacement[9: 12]
 
-        Q = np.r_[n_1tilde, m_1tilde, n_2tilde, m_2tilde]
+        B_r = np.zeros((12, 12), dtype=float)
+        B_r[0: 3, 0: 3] = np.eye(3)
+        B_r[3: 6, 3: 6] = util.get_transformation(theta_1_vec)
+        B_r[6: 9, 6: 9] = np.eye(3)
+        B_r[9: 12, 9: 12] = util.get_transformation(theta_2_vec)
 
-        return Q
+        if np.linalg.norm(theta_1_vec) == 0.0:
+            K_v1 = np.zeros((3, 3), dtype=float)
+        else:
+            theta_1 = np.linalg.norm(theta_1_vec)
+            n = theta_1_vec / theta_1
+            v = f_g[3: 6]
+            v_tilde = util.get_skew_symmetric(v)
 
-    @property
-    def Km_matrix(self):
+            K_v1 = -(sin(theta_1)/theta_1 - (sin(theta_1/2)/(theta_1/2)) ** 2) * np.cross(n, v, axisa=0, axisb=0, axisc=0) @ n.T + 1/2 * (sin(theta_1/2)/(theta_1/2)) ** 2 * v_tilde + (cos(theta_1) /
+                                                                                                                                                                                        theta_1 - sin(theta_1)/theta_1**2)*(v @ n.T - float(n.T @ v) * n @ n.T) + (1/theta_1 - sin(theta_1)/theta_1 ** 2) * (n @ v.T - 2 * float(n.T @ v) * n @ n.T + float(n.T @ v) * np.eye(3))
 
-        K_m = self.D_matrix * self.local_force_a[0]
-        - self.E_matrix @ self.Q_matrix @ self.G_matrix.T @ self.E_matrix.T
-        + self.E_matrix @ self.G_matrix @ self.a_vector @ self.r_vector
+        if np.linalg.norm(theta_2_vec) == 0.0:
+            K_v2 = np.zeros((3, 3), dtype=float)
+        else:
+            theta_2 = np.linalg.norm(theta_2_vec)
+            n = theta_2_vec / theta_2
+            v = f_g[9: 12]
+            v_tilde = util.get_skew_symmetric(v)
 
-        return K_m
+            K_v2 = -(sin(theta_2)/theta_2 - (sin(theta_2/2)/(theta_2/2)) ** 2) * np.cross(n, v, axisa=0, axisb=0, axisc=0) @ n.T + 1/2 * (sin(theta_2/2)/(theta_2/2)) ** 2 * v_tilde + (cos(theta_2) /
+                                                                                                                                                                                        theta_2 - sin(theta_2)/theta_2**2)*(v @ n.T - float(n.T @ v) * n @ n.T) + (1/theta_2 - sin(theta_2)/theta_2 ** 2) * (n @ v.T - 2 * float(n.T @ v) * n @ n.T + float(n.T @ v) * np.eye(3))
 
-    @property
-    def global_stiffness_matrix(self):
+        K_v = np.zeros((12, 12), dtype=float)
+        K_v[3: 6, 3: 6] = K_v1
+        K_v[9: 12, 9: 12] = K_v2
 
-        return self.Bg_matrix.T @ self.Ka_matrix @ self.Bg_matrix + self.Km_matrix
+        f_r = B_r @ f_g
+        K_r = B_r.T @ K_g @ B_r + K_v
+
+        return K_r, f_r
