@@ -5,6 +5,7 @@
 """
 from source.System import System
 import time
+import numpy as np
 
 dim = 3
 geometry = "cantilever_beam_elastoplastic_3D"
@@ -15,12 +16,13 @@ h = 0.5  # height
 E = 3e7  # Young's modulus
 
 sys.initialize_structure(beamtype="Timoshenko",
-                         youngs_modulus=E, poisson_ratio=0.499, width=b, height=h)
+                         youngs_modulus=E, width=b, height=h, e_3o=np.array([[0., 0., 1.]]).T)
 sys.initialize_with_plasticity(hardening_model="linear hardening", gauss_number=(
     1, 2, 2), yield_stress=3e4, plastic_modulus=E/29)
 
 sys.add_dirichlet_bc(0, "fixed")
-sys.add_load_bc(10, "z")
+sys.add_load(10, force=np.array([[0., 0., 1.]]).T)
+sys.define_interesting_dof(10, "z")
 
 time_start = time.time()
 sys.solve_the_system(solver="load-control",

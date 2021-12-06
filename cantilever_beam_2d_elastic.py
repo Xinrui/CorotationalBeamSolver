@@ -5,6 +5,7 @@
 """
 from source.System import System
 import time
+import numpy as np
 
 dim = 2
 geometry = "cantilever_beam_elastic_2d"
@@ -18,7 +19,8 @@ sys.initialize_structure(beamtype="Bernoulli",
                          youngs_modulus=E, width=b, height=h)
 
 sys.add_dirichlet_bc(0, "fixed")
-sys.add_load_bc(7, "z")
+sys.add_load(7, force=np.array([[0., 1., 0.]]).T)
+sys.define_interesting_dof(7, "z")
 
 time_start = time.time()
 sys.solve_the_system(solver="load-control",

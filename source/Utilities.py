@@ -5,10 +5,28 @@
 
 import numpy as np
 from numpy import cos, sin, tan
-from numpy.linalg import det
+
 
 def load_mesh_file(filename):
+    """Load GiD .msh file.
 
+    Parameters
+    ----------
+    filename: str
+        the name of the GiD mesh file in meshfile folder without extension.
+
+    Returns
+    -------
+    array_nodes: 
+        an array of coordinates of all nodes. 
+    array_elements: 
+        an array of numbers of nodes of all elements.
+    number_of_nodes: 
+        the number of nodes.
+    number_of_elements: 
+        the number of elements.
+
+    """
     with open("meshfile\\" + filename + ".msh") as file:
 
         lines = file.readlines()
@@ -44,6 +62,19 @@ def load_mesh_file(filename):
 
 
 def get_eta_and_mu(alpha):
+    """Get the value of eta and mu. See (4.46) of the PhD thesis of J.-M. Battini.
+
+    Parameters
+    ----------
+    alpha: float
+        the angle of the rotation.
+
+    Returns
+    -------
+    The first coefficient eta: float.
+    The second coefficient mu: float.
+
+    """
     if alpha == 0.:
         eta = 1 / 12
         mu = 1 / 360
@@ -55,292 +86,285 @@ def get_eta_and_mu(alpha):
     return eta, mu
 
 
-def get_skew_symmetric(vec_3d):
-    skew_symmetric = np.array([[0.0, -vec_3d[2], vec_3d[1]],
-                               [vec_3d[2], 0.0, -vec_3d[0]],
-                               [-vec_3d[1], vec_3d[0], 0.0]], dtype=float)
+def get_skew_symmetric(rotational_vector):
+    """Get the skew symmetric matrix of a rotational vector.
+
+    Parameters
+    ----------
+    rotational_vector: numpy.ndarray
+        the rotational vector.
+
+    Returns
+    -------
+    skew_symmetric: 
+        the skew symmetric matrix of the rotational vector.
+
+    """
+    skew_symmetric = np.array([[0.0, -rotational_vector[2], rotational_vector[1]],
+                               [rotational_vector[2], 0.0, -rotational_vector[0]],
+                               [-rotational_vector[1], rotational_vector[0], 0.0]], dtype=float)
     return skew_symmetric
 
 
 def get_rotational_vector(skew_symmetric):
-    if((abs(skew_symmetric + skew_symmetric.T) < 1e-12 * np.eye(3)).all()):
-        raise TypeError("The input is not skew symmetric!")
-    vec_3d = np.zeros((3, 1), dtype=float)
-    vec_3d[0], vec_3d[1], vec_3d[2] = skew_symmetric[2, 1], skew_symmetric[0, 2], skew_symmetric[1, 0]
+    """Get the rotational vector from a skew symmetric matrix.
 
-    return vec_3d
+    Parameters
+    ----------
+    skew_symmetric: numpy.ndarray
+        the skew symmetric matrix.
+
+    Returns
+    -------
+    rotational_vector: 
+        the rotational vector.
+
+    """
+    # make sure that the input is skew symmetric
+    if np.linalg.norm(skew_symmetric + skew_symmetric.T) > 1e-12:
+        raise ValueError("The input is not skew symmetric!")
+
+    rotational_vector = np.zeros((3, 1), dtype=float)
+    rotational_vector[0] = skew_symmetric[2, 1]
+    rotational_vector[1] = skew_symmetric[0, 2]
+    rotational_vector[2] = skew_symmetric[1, 0]
+
+    return rotational_vector
 
 
-def decompose_rotational_vector(vec_3d):
+def decompose_rotational_vector(rotational_vector):
+    """Get the angle of rotation and the skew symmetric matrix from a rotational vector.
 
-    angle = np.linalg.norm(vec_3d)
-    skew_symmetric = get_skew_symmetric(vec_3d)
+    Parameters
+    ----------
+    rotational_vector: numpy.ndarray
+        the rotational vector.
+
+    Returns
+    -------
+    angle: 
+        the angle of rotation.
+    skew_symmetric: 
+        the skew symmetric matrix.
+
+    """
+    angle = np.linalg.norm(rotational_vector)
+    skew_symmetric = get_skew_symmetric(rotational_vector)
     return angle, skew_symmetric
 
 
-def rodrigues(vec_3d):
-    angle, skew_symmetric = decompose_rotational_vector(vec_3d)
+def rodrigues(rotational_vector):
+    """Get the exponent of a skew symmetric, which can be calculated from the rotational vector as input. 
+    This function performs the famous Rodrigues' formula.
+
+    Parameters
+    ----------
+    rotational_vector: np.ndarray
+        the rotational vector.
+
+    Returns
+    -------
+    rotation_matrix: 
+        the rotation matrix.
+
+    """
+    angle, skew_symmetric = decompose_rotational_vector(rotational_vector)
     if angle == 0.0:
-        R = np.eye(3)
+        rotation_matrix = np.eye(3)
     else:
-        R = np.eye(3) + sin(angle) / angle * skew_symmetric + (1 - cos(angle)) / (angle ** 2) * skew_symmetric @ skew_symmetric
-    return R
+        rotation_matrix = np.eye(3) + sin(angle) / angle * skew_symmetric + (1 -
+                                                                             cos(angle)) / (angle ** 2) * skew_symmetric @ skew_symmetric
+    return rotation_matrix
 
-def log(skew_symmetric):
-    cosalpha = (np.trace(skew_symmetric) - 1) / 2
-    
-    if np.abs(cosalpha - 1.0) < 1e-3:
+
+def log(rotation_matrix):
+    """Perform the inverse operation of Rodrigues' formula: get the logarithm,
+    which should be a skew symmetric matrix, of the input rotation matrix.
+
+    Parameters
+    ----------
+    rotation_matrix: np.ndarray
+        the rotation matrix.
+
+    Returns
+    -------
+    skew_symmetric: 
+        the skew symmetric, which can be furthur expressed as rotational vector.
+
+    """
+    cosalpha = (np.trace(rotation_matrix) - 1) / 2
+
+    # in initial state, cos(alpha) may equal to 1.000000002 due to some numerical problems,
+    # which is not acceptable for arccos function. The error is here filtered for this reason.
+    if np.abs(cosalpha - 1.0) < 1e-8:
         cosalpha = 1.0
-    if np.abs(cosalpha + 1.0) < 1e-3:
-        cosalpha = -1.0 
-    
-    alpha = np.arccos(cosalpha)
-    
-    
-    if alpha == 0.0:
-        log_skew_symmetric = 1/2 * (skew_symmetric - skew_symmetric.T)
-    else:
-        log_skew_symmetric = alpha / (2 * sin(alpha)) * (skew_symmetric - skew_symmetric.T)
-        
-    return log_skew_symmetric
+    if np.abs(cosalpha + 1.0) < 1e-8:
+        cosalpha = -1.0
 
-def get_det_transformation(vec_3d):
-    angle, skew_symmetric = decompose_rotational_vector(vec_3d)
+    alpha = np.arccos(cosalpha)
+
+    if alpha == 0.0:
+        skew_symmetric = 1/2 * (rotation_matrix - rotation_matrix.T)
+    else:
+        skew_symmetric = alpha / \
+            (2 * sin(alpha)) * (rotation_matrix - rotation_matrix.T)
+
+    return skew_symmetric
+
+
+def get_det_transformation(rotational_vector):
+    """Get the determinant of the transformation matrix. See (4.13) 
+    of the PhD thesis of J.-M. Battini.
+
+    Parameters
+    ----------
+    rotational_vector: np.ndarray
+        the rotational vector.
+
+    Returns
+    -------
+    det(T_s): 
+        the determinant of the transformation matrix.
+
+    """
+    angle, skew_symmetric = decompose_rotational_vector(rotational_vector)
     return 2 * (1 - cos(angle)) / angle ** 2
 
-def get_transformation(vec_3d):
-    angle, skew_symmetric = decompose_rotational_vector(vec_3d)
+
+def get_transformation(rotational_vector):
+    """Get the transformation matrix. See (4.12) of the PhD thesis of J.-M. Battini.
+
+    Parameters
+    ----------
+    rotational_vector: numpy.ndarray
+        the rotational vector.
+
+    Returns
+    -------
+    T_s: 
+        the transformation matrix.
+
+    """
+    angle, skew_symmetric = decompose_rotational_vector(rotational_vector)
     if angle == 0.:
         T_s = np.eye(3)
 
     else:
-        T_s = np.eye(3) + (1 - cos(angle)) / angle**2 * skew_symmetric + (angle - sin(angle)) / angle**3 * skew_symmetric @ skew_symmetric
+        T_s = np.eye(3) + (1 - cos(angle)) / angle**2 * skew_symmetric + \
+            (angle - sin(angle)) / angle**3 * skew_symmetric @ skew_symmetric
 
     return T_s
 
-def get_transformation_inv(vec_3d):
-    angle, skew_symmetric = decompose_rotational_vector(vec_3d)
+
+def get_transformation_inv(rotational_vector):
+    """Get the inverse of the transformation matrix. See (4.15) of the PhD thesis of J.-M. Battini.
+
+    Parameters
+    ----------
+    rotational_vector: numpy.ndarray
+        the rotational vector.
+
+    Returns
+    -------
+    inv(T_s): 
+        the inverse of the transformation matrix.
+
+    """
+    angle, skew_symmetric = decompose_rotational_vector(rotational_vector)
     if angle == 0.:
         T_s_inv = np.eye(3)
 
     else:
         T_s_inv = ((angle / 2) / tan(angle / 2)) * np.eye(3) + (
-            1 - (angle / 2) / tan(angle / 2)) * vec_3d @ vec_3d.T / angle ** 2 - 1 / 2 * skew_symmetric
+            1 - (angle / 2) / tan(angle / 2)) * rotational_vector @ rotational_vector.T / angle ** 2 - 1 / 2 * skew_symmetric
 
     return T_s_inv
 
-def decompose_strain(strain):
-    
-    volumetric_strain = trace(strain)
-    
+
+def decompose_strain(strain_vector):
+    """
+    Parameters
+    ----------
+    strain_vector: numpy.ndarray
+        the strain vector.
+
+    Returns
+    -------
+    volumetric_strain: float
+        eps_v = eps_11 + eps_22 + eps_33
+    deviatoric_strain: numpy.ndarray
+        eps_d = eps - 1/3 * volumetric_strain * [1, 1, 1, 0, 0, 0].T
+
+    """
+    volumetric_strain = trace(strain_vector)
+
     isotropic_strain = 1/3 * volumetric_strain * unit_tensor()
-    
-    deviatoric_strain = strain - isotropic_strain
-    
+
+    deviatoric_strain = strain_vector - isotropic_strain
+
     return volumetric_strain, deviatoric_strain
 
-def stress_norm(stress):
-    return np.sqrt(stress[0, 0] ** 2 +
-                   stress[1, 0] ** 2 +
-                   stress[2, 0] ** 2 +
-                   2 * stress[3, 0] ** 2 +
-                   2 * stress[4, 0] ** 2 +
-                   2 * stress[5, 0] ** 2)
+
+def stress_norm(stress_vector):
+    """There are nine components in stress matrix, however, only 
+    six of which are imdependent and can be written in vector form.
+    If so, np.linalg.norm() does not work, this function must be adopted
+    instead.
+
+    Parameters
+    ----------
+    stress_vector: numpy.ndarray
+        the stress vector.
+
+    Returns
+    -------
+    norm: 
+        the norm of the stress matrix.
+
+    """
+    return np.sqrt(stress_vector[0, 0] ** 2 +
+                   stress_vector[1, 0] ** 2 +
+                   stress_vector[2, 0] ** 2 +
+                   2 * stress_vector[3, 0] ** 2 +
+                   2 * stress_vector[4, 0] ** 2 +
+                   2 * stress_vector[5, 0] ** 2)
 
 
 def unit_tensor():
+    """
+    Returns
+    -------
+    unit tensor: 
+        [1., 1., 1., 0., 0., 0.].T
+
+    """
     return np.array([[1., 1., 1., 0., 0., 0.]]).T
 
+
 def deviatoric_projection_tensor():
+    """
+    Returns
+    -------
+    deviatoric projection tensor: numpy.ndarray
+        I - 1/3 * unit_tensor ⊗ unit_tensor.T
+
+    """
     return np.eye(6) - 1/3 * unit_tensor() @ unit_tensor().T
 
-def trace(vec):
-    return float(vec[0, 0] + vec[1, 0] + vec[2, 0])
 
+def trace(vector):
+    """np.trace() only work for square matrices. To get the trace of 
+    stress/strain vectors, this function must be applied.
 
-# # def eight_node_serendipity_shape_function(xi, eta):
-# #     return np.array([
-# #         -1/4 * (1 - xi) * (1 - eta) * (1 + xi + eta),
-# #         -1/4 * (1 + xi) * (1 - eta) * (1 - xi + eta),
-# #         -1/4 * (1 + xi) * (1 + eta) * (1 - xi - eta),
-# #         -1/4 * (1 - xi) * (1 + eta) * (1 + xi - eta),
-# #         1/2 * (1 - xi ** 2) * (1 - eta),
-# #         1/2 * (1 - eta ** 2) * (1 + xi),
-# #         1/2 * (1 - xi ** 2) * (1 + eta),
-# #         1/2 * (1 - eta ** 2) * (1 - xi)])
+    Parameters
+    ----------
+    vector: numpy.ndarray
+        the stress/strain vector.
 
+    Returns
+    -------
+    trace: 
+        the sum of diagonal components of the stress/strain matrix.
 
-# # def eight_node_serendipity_shape_function_ders(xi, eta):
-# #     dN_dxi = np.array([
-# #         (1/4 - 1/4 * eta) * (eta + xi + 1) + (1 - eta) * (1/4 * xi - 1/4),
-# #         -(1 - eta) * (-1/4 * xi - 1/4) + (1/4 * eta - 1/4) * (eta - xi + 1),
-# #         (-1/4 * eta - 1/4) * (-eta - xi + 1) - (eta + 1) * (-1/4 * xi - 1/4),
-# #         (1/4 * eta + 1/4) * (-eta + xi + 1) + (eta + 1) * (1/4 * xi - 1/4),
-# #         -xi * (1 - eta),
-# #         1/2 - 1/2 * eta ** 2,
-# #         -xi * (eta + 1),
-# #         1/2 * eta ** 2 - 1/2])
-
-# #     dN_deta = np.array([
-# #         (1/4 - 1/4 * xi) * (eta + xi + 1) + (1 - eta) * (1/4 * xi - 1/4),
-# #         (1 - eta) * (-1/4 * xi - 1/4) + (1/4 * xi + 1/4) * (eta - xi + 1),
-# #         -(eta + 1) * (-1/4 * xi - 1/4) + (-1/4 * xi - 1/4) * (-eta - xi + 1),
-# #         -(eta + 1) * (1/4 * xi - 1/4) + (1/4 * xi - 1/4) * (-eta + xi + 1),
-# #         1/2 * xi ** 2 - 1/2,
-# #         -eta * (xi + 1),
-# #         1/2 - 1/2 * xi ** 2,
-# #         -eta * (1 - xi)])
-
-# #     return dN_dxi, dN_deta
-
-
-# def nodal_warping_function(width, height):
-
-#     def N(xi, eta): return np.array([
-#         -1/4 * (1 - xi) * (1 - eta) * (1 + xi + eta),
-#         -1/4 * (1 + xi) * (1 - eta) * (1 - xi + eta),
-#         -1/4 * (1 + xi) * (1 + eta) * (1 - xi - eta),
-#         -1/4 * (1 - xi) * (1 + eta) * (1 + xi - eta),
-#         1/2 * (1 - xi ** 2) * (1 - eta),
-#         1/2 * (1 - eta ** 2) * (1 + xi),
-#         1/2 * (1 - xi ** 2) * (1 + eta),
-#         1/2 * (1 - eta ** 2) * (1 - xi)])
-
-#     def dN_dxi(xi, eta): return np.array([
-#         -1/4 * (-1 + eta) * (2 * xi + eta),
-#         1/4 * (-1 + eta) * (eta - 2 * xi),
-#         1/4 * (1 + xi) * (2 * eta + xi),
-#         -1/4 * (1 + xi) * (eta - 2 * xi),
-#         xi * (-1 + eta),
-#         -1/2 * (1 + eta) * (-1 + eta),
-#         -xi * (1 + eta),
-#         1/2 * (1 + eta) * (-1 + eta)])
-
-#     def dN_deta(xi, eta): return np.array([
-#         -1/4 * (-1 + xi) * (xi + 2 * eta),
-#         1/4 * (1 + xi) * (2 * eta - xi),
-#         1/4 * (1 + xi) * (xi + 2 * eta),
-#         -1/4 * (-1 + xi) * (2 * eta - xi),
-#         1/2 * (1 + xi) * (-1 + xi),
-#         -eta * (1 + xi),
-#         -1/2 * (1 + xi) * (-1 + xi),
-#         eta * (-1 + xi)])
-
-#     [gauss_locations_xi, weights_xi] = np.polynomial.legendre.leggauss(4)
-#     [gauss_locations_eta, weights_eta] = np.polynomial.legendre.leggauss(4)
-
-#     # y_I = np.array([-width/2, width/2, width/2, -width/2,
-#     #                 0., width/2, 0., -width/2])
-#     # z_I = np.array([-height/2, -height/2, height/2, height/2,
-#     #                 -height/2, 0., height/2, 0.])
-
-#     # y_numerical = lambda xi, eta: np.dot(N(xi, eta), y_I)
-#     # z_numerical = lambda xi, eta: np.dot(N(xi, eta), z_I)
-
-#     def y(xi): return width/2 * xi
-#     def z(eta): return height/2 * eta
-
-#     # XI = np.linspace(-1, 1, 21)
-#     # ETA = np.linspace(-1, 1, 21)
-#     # XI_mesh, ETA_mesh = np.meshgrid(XI, ETA)
-
-#     # Y_numerical = np.zeros((21, 21), dtype=float)
-#     # Z_numerical = np.zeros((21, 21), dtype=float)
-#     # for i, xi in enumerate(XI):
-#     #     for j, eta in enumerate(ETA):
-#     #         Y_numerical[i, j] = y_numerical(xi, eta)
-#     #         Z_numerical[i, j] = z_numerical(xi, eta)
-
-#     # fig = plt.figure()
-#     # ax = Axes3D(fig, auto_add_to_figure=False)
-#     # fig.add_axes(ax)
-#     # ax.plot_surface(XI_mesh, ETA_mesh, Y_numerical, rstride=1, cstride=1, cmap=cm.viridis)
-#     # ax.set_xlabel('$y$')
-#     # ax.set_ylabel('$z$')
-
-#     # plt.show()
-
-
-# #     stiffness = np.zeros((8, 8), dtype=float)
-# #     for i in range(8):
-# #         for j in range(8):
-# #             for ixi in range(4):
-# #                 for jeta in range(4):
-# #                     stiffness[i, j] += (height / width + width / height) * \
-# #                     dN_dxi(gauss_locations_xi[ixi], gauss_locations_eta[jeta])[i] * \
-# #                     dN_deta(gauss_locations_xi[ixi], gauss_locations_eta[jeta])[j] * \
-# #                     weights_xi[ixi] * weights_eta[jeta]
-
-# #     load = np.zeros((8, 1), dtype=float)
-# #     for i in range(8):
-# #         for ixi in range(4):
-# #             for jeta in range(4):
-# #                 load[i, 0] += (height/2 * dN_dxi(gauss_locations_xi[ixi], gauss_locations_eta[jeta])[i] * z(gauss_locations_eta[jeta]) - \
-# #                             width/2 * dN_dxi(gauss_locations_xi[ixi], gauss_locations_eta[jeta])[i] * y(gauss_locations_xi[ixi])) * \
-# #                             weights_xi[ixi] * weights_eta[jeta]
-
-# #     arbitrary_dof = 2
-# #     modified_stiffness = stiffness.copy()
-# #     for ientry in range(8):
-# #         modified_stiffness[arbitrary_dof, ientry] = 0.
-# #         modified_stiffness[ientry, arbitrary_dof] = 0.
-# #         modified_stiffness[arbitrary_dof, arbitrary_dof] = 1.
-
-# #     modified_load = load.copy()
-# #     modified_load[arbitrary_dof] = 0.
-
-# #     nodal_warping_function = np.linalg.solve(modified_stiffness, modified_load)
-
-# #     warping_function = lambda xi, eta: np.dot(N(xi, eta), nodal_warping_function.reshape(8))
-
-# #     average_integral = 0.0
-# #     for ixi in range(4):
-# #         for jeta in range(4):
-# #             average_integral += warping_function(gauss_locations_xi[ixi], gauss_locations_eta[jeta]) * \
-# #             width * height / 4 * weights_xi[ixi] * weights_eta[jeta]
-# #     average_integral /= width * height
-
-# #     adjusted_nodal_warping_function = nodal_warping_function.copy()
-# #     for i in range(8):
-# #         adjusted_nodal_warping_function[i] -= average_integral
-
-# #     return adjusted_nodal_warping_function
-
-
-# # def warping_function(y, z, width, height, nodal_warping_vector):
-
-# #     N = lambda xi, eta: np.array([
-# #         -1/4 * (1 - xi) * (1 - eta) * (1 + xi + eta),
-# #         -1/4 * (1 + xi) * (1 - eta) * (1 - xi + eta),
-# #         -1/4 * (1 + xi) * (1 + eta) * (1 - xi - eta),
-# #         -1/4 * (1 - xi) * (1 + eta) * (1 + xi - eta),
-# #         1/2 * (1 - xi ** 2) * (1 - eta),
-# #         1/2 * (1 - eta ** 2) * (1 + xi),
-# #         1/2 * (1 - xi ** 2) * (1 + eta),
-# #         1/2 * (1 - eta ** 2) * (1 - xi)])
-
-# #     xi = 2 * y / width
-# #     eta = 2 * z / height
-
-# #     return np.dot(N(xi, eta), nodal_warping_vector)
-
-
-# # d = nodal_warping_function(2., 2.)
-
-# # Y = np.linspace(-1, 1, 21)
-# # Z = np.linspace(-1, 1, 21)
-# # Y_grid, Z_grid = np.meshgrid(Y, Z)
-# # Omega_numerical = np.zeros((21, 21), dtype=float)
-# # for i, y in enumerate(Y):
-# #     for j, z in enumerate(Z):
-# #         Omega_numerical[i, j] = warping_function(y, z, 2.0, 2.0, d)
-
-# # fig = plt.figure()
-# # ax = Axes3D(fig, auto_add_to_figure=False)
-# # fig.add_axes(ax)
-# # ax.plot_surface(Y_grid, Z_grid, Omega_numerical, rstride=1, cstride=1, cmap=cm.viridis)
-
-# # plt.show()
-
-# # integration = integrate.nquad(lambda y, z: warping_function(y, z, 2.0, 2.0, d), [[-1, 1],[-1, 1]])
-# # print(integration)
+    """
+    return float(vector[0, 0] + vector[1, 0] + vector[2, 0])

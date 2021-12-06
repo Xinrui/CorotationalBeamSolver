@@ -5,6 +5,7 @@
 """
 from source.System import System
 import time
+import numpy as np
 
 dim = 2
 geo = "toggle_frame"
@@ -19,7 +20,8 @@ sys.initialize_with_plasticity(hardening_model="linear hardening", gauss_number=
 
 sys.add_dirichlet_bc(0, "xz")
 sys.add_dirichlet_bc(8, "xz")
-sys.add_load_bc(4, "z")
+sys.add_load(4, force=np.array([[0., 1., 0.]]).T)
+sys.define_interesting_dof(4, "z")
 
 time_start = time.time()
 sys.solve_the_system(solver="displacement-control", number_of_increments=100, displacement=-0.8, max_iteration_steps=1000)

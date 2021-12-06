@@ -5,6 +5,7 @@
 """
 from source.System import System
 import time
+import numpy as np
 
 dim = 2
 geo = "cyclic_loading"
@@ -16,10 +17,11 @@ E = 29.0e3  # Young's modulus
 
 sys.initialize_structure(beamtype="Bernoulli", youngs_modulus=E, width=b, height=h)
 sys.initialize_with_plasticity(
-    hardening_model="linear hardening", gauss_number=(2,2,2), yield_stress=36., plastic_modulus=500.)
+    hardening_model="linear hardening", gauss_number=(2,2), yield_stress=36., plastic_modulus=500.)
 
 sys.add_dirichlet_bc(0, "fixed")
-sys.add_load_bc(1, "x")
+sys.add_load(1, force=np.array([[1., 0., 0.]]).T)
+sys.define_interesting_dof(1, "x")
 
 time_start = time.time()
 

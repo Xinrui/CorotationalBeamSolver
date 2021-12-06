@@ -11,30 +11,20 @@ from source.CorotationalBeamElement3D import CorotationalBeamElement3D
 
 import source.Utilities as util
 
+
 class System():
+    """It is a class constructing a non-linear system with corotational beam elements."""
+
     def __init__(self, dimension, geometry_name):
         self.dimension = dimension
         self.geometry_name = geometry_name
         self.analysis = "elastic"
-
-        self.structure = None
-
-        self.number_of_elements = None
-        self.number_of_nodes = None
-        self.number_of_dofs = None
-
         self.dirichlet_boundary_condition = []
-        self.load_boundary_condition = None
-        self.load_increment_vector = None
 
-        self.state_variable = None
-        self.control_parameter = None
-
-        self.interesting_dof = None
         self.state_variable_plot = [0.]
         self.control_parameter_plot = [0.]
 
-    def initialize_structure(self, beamtype, youngs_modulus, width, height, poisson_ratio = 0.499):
+    def initialize_structure(self, beamtype, youngs_modulus, width, height, poisson_ratio=0.499, e_2o=None, e_3o=None):
         structure = []
         array_nodes, array_elements, self.number_of_nodes, self.number_of_elements = util.load_mesh_file(
             self.geometry_name)
@@ -49,13 +39,15 @@ class System():
                     2, 1)
                 initial_coordinate_node_2 = array_nodes[0: 2, ele[1] - 1].reshape(
                     2, 1)
-                co_ele = CorotationalBeamElement2D(beamtype, youngs_modulus, poisson_ratio, width, height, initial_coordinate_node_1, initial_coordinate_node_2, iele)
+                co_ele = CorotationalBeamElement2D(
+                    beamtype, youngs_modulus, poisson_ratio, width, height, initial_coordinate_node_1, initial_coordinate_node_2, iele)
             else:
                 initial_coordinate_node_1 = array_nodes[:, ele[0] - 1].reshape(
                     3, 1)
                 initial_coordinate_node_2 = array_nodes[:, ele[1] - 1].reshape(
                     3, 1)
-                co_ele = CorotationalBeamElement3D(beamtype, youngs_modulus, poisson_ratio, width, height, initial_coordinate_node_1, initial_coordinate_node_2, iele)
+                co_ele = CorotationalBeamElement3D(beamtype, youngs_modulus, poisson_ratio, width,
+                                                   height, initial_coordinate_node_1, initial_coordinate_node_2, iele, e_2o, e_3o)
 
             structure.append(co_ele)
 
@@ -67,7 +59,8 @@ class System():
                                    modified_modulus=None, exponent=None):
         self.analysis = hardening_model
         for ele in self.structure:
-            ele.apply_hardening_model(hardening_model, gauss_number, yield_stress, kinematic_hardening_modulus, plastic_modulus, saturation_stress, modified_modulus, exponent)
+            ele.apply_hardening_model(hardening_model, gauss_number, yield_stress, kinematic_hardening_modulus,
+                                      plastic_modulus, saturation_stress, modified_modulus, exponent)
 
     def add_dirichlet_bc(self, node, dof):
         if self.dimension == 2:
@@ -110,53 +103,53 @@ class System():
                 self.dirichlet_boundary_condition.append(6 * node + 4)
                 self.dirichlet_boundary_condition.append(6 * node + 5)
 
-    def add_load_bc(self, node, dof):
-        if self.dimension == 2:
-            if dof == "x":
-                self.load_boundary_condition = 3 * node
-            elif dof == "z":
-                self.load_boundary_condition = 3 * node + 1
-            elif dof == "m":
-                self.load_boundary_condition = 3 * node + 2
-        else:
-            if dof == "x":
-                self.load_boundary_condition = 6 * node
-            elif dof == "y":
-                self.load_boundary_condition = 6 * node + 1
-            elif dof == "z":
-                self.load_boundary_condition = 6 * node + 2
-
+    def add_load(self, node, force):
         self.load_increment_vector = np.zeros(
             (self.number_of_dofs, 1), dtype=float)
-        self.load_increment_vector[self.load_boundary_condition] = 1
-        self.interesting_dof = self.load_boundary_condition
+        if self.dimension == 2:
+            self.load_increment_vector[3 * node: 3 * node + 3] = force
+        else:
+            self.load_increment_vector[6 * node: 6 * node + 3] = force
+
+    def define_interesting_dof(self, node, direction):
+        if self.dimension == 2:
+            if direction == "x":
+                self.interesting_dof = 3 * node
+            elif direction == "z":
+                self.interesting_dof = 3 * node + 1
+            elif direction == "m":
+                self.interesting_dof = 3 * node + 2
+        else:
+            if direction == "x":
+                self.interesting_dof = 6 * node
+            elif direction == "y":
+                self.interesting_dof = 6 * node + 1
+            elif direction == "z":
+                self.interesting_dof = 6 * node + 2
 
     def master_stiffness_force(self):
         K = np.zeros((self.number_of_dofs, self.number_of_dofs), dtype=float)
         F = np.zeros((self.number_of_dofs, 1), dtype=float)
-        
+
         if self.dimension == 2:
             dof_per_ele = 6
         else:
             dof_per_ele = 12
-    
+
         for ele in self.structure:
             eft = ele.element_freedom_table
-            if self.dimension == 2:
-                k, f = ele.global_stiffness_force()
-            else:
-                k, f = ele.global_stiffness_force()
+            k, f = ele.global_stiffness_force()
             for idof in range(dof_per_ele):
                 F[eft[idof]] += f[idof]
                 for jdof in range(idof, dof_per_ele):
                     K[eft[idof], eft[jdof]] += k[idof, jdof]
                     K[eft[jdof], eft[idof]] = K[eft[idof], eft[jdof]]
-                    
+
         return K, F
 
     def modified_stiffness_force(self):
         K, F = self.master_stiffness_force()
-        
+
         for idof in self.dirichlet_boundary_condition:
             F[idof] = 0.0
             for jentry in range(self.number_of_dofs):
@@ -168,7 +161,7 @@ class System():
 
     def update_member_data_2d(self, u, lam):
         for iele, ele in enumerate(self.structure):
-            ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
+            ele.global_displacement = u[3 * iele: 3 * iele + 6]
             if ele.analysis == "linear hardening":
                 ele.perform_linear_hardening()
             elif ele.analysis == "exponential hardening":
@@ -181,7 +174,7 @@ class System():
 
     def update_member_data_2d_iteration(self, u, lam, *args):
         for iele, ele in enumerate(self.structure):
-            ele.incremental_global_displacement = u[3 * iele: 3 * iele + 6]
+            ele.global_displacement = u[3 * iele: 3 * iele + 6]
             if ele.analysis == "linear hardening":
                 ele.plastic_strain = args[0][iele]
                 ele.internal_hardening_variable = args[1][iele]
@@ -203,9 +196,11 @@ class System():
 
     def update_member_data_3d(self, u, lam, deltau):
         for iele, ele in enumerate(self.structure):
-            ele.incremental_global_displacement = u[6 * iele: 6 * iele + 12]
-            ele.current_orientation_node_1 = util.rodrigues(deltau[6 * iele + 3: 6 * iele +  6]) @ ele.current_orientation_node_1
-            ele.current_orientation_node_2 = util.rodrigues(deltau[6 * iele + 9: 6 * iele + 12]) @ ele.current_orientation_node_2
+            ele.global_displacement = u[6 * iele: 6 * iele + 12]
+            ele.current_orientation_node_1 = util.rodrigues(
+                deltau[6 * iele + 3: 6 * iele + 6]) @ ele.current_orientation_node_1
+            ele.current_orientation_node_2 = util.rodrigues(
+                deltau[6 * iele + 9: 6 * iele + 12]) @ ele.current_orientation_node_2
             if ele.analysis == "linear hardening":
                 ele.perform_linear_hardening()
         self.state_variable = u
@@ -213,23 +208,25 @@ class System():
 
     def update_member_data_3d_iteration(self, u, lam, deltau, *args):
         for iele, ele in enumerate(self.structure):
-            ele.incremental_global_displacement = u[6 * iele: 6 * iele + 12]
-            ele.current_orientation_node_1 = util.rodrigues(deltau[6 * iele + 3: 6 * iele + 6]) @ ele.current_orientation_node_1
-            ele.current_orientation_node_2 = util.rodrigues(deltau[6 * iele + 9: 6 * iele + 12]) @ ele.current_orientation_node_2
+            ele.global_displacement = u[6 * iele: 6 * iele + 12]
+            ele.current_orientation_node_1 = util.rodrigues(
+                deltau[6 * iele + 3: 6 * iele + 6]) @ ele.current_orientation_node_1
+            ele.current_orientation_node_2 = util.rodrigues(
+                deltau[6 * iele + 9: 6 * iele + 12]) @ ele.current_orientation_node_2
             if ele.analysis == "linear hardening":
                 ele.plastic_strain = args[0][iele]
                 ele.internal_hardening_variable = args[1][iele]
-                # ele.back_stress = args[2][iele]
                 ele.perform_linear_hardening()
 
         self.state_variable = u
         self.control_parameter = lam
-    
+
     def load_control(self, number_of_increments, tolerance, max_iteration_steps, load):
         for n in range(number_of_increments):
             K_s, F_s = self.modified_stiffness_force()
             Deltalam = load / number_of_increments
-            Deltau = np.linalg.solve(K_s, Deltalam * self.load_increment_vector)
+            Deltau = np.linalg.solve(
+                K_s, Deltalam * self.load_increment_vector)
 
             u_pre = self.state_variable + Deltau
             lam_pre = self.control_parameter + Deltalam
@@ -241,14 +238,14 @@ class System():
                 self.update_member_data_3d(u_pre, lam_pre, Deltau)
 
             u_temp = u_pre
-            
+
             # initialize iteration counter
             kiter = 0
-            
+
             K_s, F_s = self.modified_stiffness_force()
             residual = F_s - self.control_parameter * self.load_increment_vector
             residual_norm = np.linalg.norm(residual)
-            
+
             if self.analysis != "elastic":
                 if self.dimension == 2:
                     plastic_strain = []
@@ -289,10 +286,10 @@ class System():
                 K_s, F_s = self.modified_stiffness_force()
                 residual = F_s - self.control_parameter * self.load_increment_vector
                 residual_norm = np.linalg.norm(residual)
-                
+
                 # update iterations counter
                 kiter += 1
-                
+
                 print("Iteration step: " + str(kiter))
                 print("residual norm: " + str(residual_norm))
                 if(kiter == max_iteration_steps):
@@ -313,8 +310,9 @@ class System():
                 K_s, self.load_increment_vector)
 
             Deltalam = float(
-                displacement / (number_of_increments * velocity[self.load_boundary_condition]))
-            Deltau = np.linalg.solve(K_s, Deltalam * self.load_increment_vector)
+                displacement / (number_of_increments * velocity[self.interesting_dof]))
+            Deltau = np.linalg.solve(
+                K_s, Deltalam * self.load_increment_vector)
 
             u_pre = self.state_variable + Deltau
             lam_pre = self.control_parameter + Deltalam
@@ -334,7 +332,7 @@ class System():
             K_s, F_s = self.modified_stiffness_force()
             residual = F_s - self.control_parameter * self.load_increment_vector
             residual_norm = np.linalg.norm(residual)
-            
+
             if self.analysis != "elastic":
                 if self.dimension == 2:
                     plastic_strain = []
@@ -352,22 +350,25 @@ class System():
                         plastic_strain.append(ele.plastic_strain)
                         internal_hardening_variable.append(
                             ele.internal_hardening_variable)
-                        
+
             # iterate, until good result or so many iteration steps
             while(residual_norm > tolerance and kiter < max_iteration_steps):
                 K_s, F_s = self.modified_stiffness_force()
-                
+
                 adjusted_stiffness_matrix = K_s.copy()
-                adjusted_stiffness_matrix[:, self.load_boundary_condition] = -self.load_increment_vector.reshape(self.number_of_dofs)
-                
-                augmented_solution = -np.linalg.solve(adjusted_stiffness_matrix, residual)
-                deltalam = float(augmented_solution[self.load_boundary_condition])
+                adjusted_stiffness_matrix[:, self.interesting_dof] = - \
+                    self.load_increment_vector.reshape(self.number_of_dofs)
+
+                augmented_solution = - \
+                    np.linalg.solve(adjusted_stiffness_matrix, residual)
+                deltalam = float(
+                    augmented_solution[self.interesting_dof])
                 deltau = np.copy(augmented_solution)
-                deltau[self.load_boundary_condition, 0] = 0.0
-                
+                deltau[self.interesting_dof, 0] = 0.0
+
                 u_temp += deltau
                 lam_temp += deltalam
-                
+
                 if self.analysis != "elastic":
                     if self.dimension == 2:
                         self.update_member_data_2d_iteration(
@@ -382,15 +383,15 @@ class System():
                     else:
                         self.update_member_data_3d(
                             u_temp, lam_temp, deltau)
-                
+
                 K_s, F_s = self.modified_stiffness_force()
-                
+
                 residual = F_s - self.control_parameter * self.load_increment_vector
                 residual_norm = np.linalg.norm(residual)
-                
+
                 # update iterations counter
                 kiter += 1
-                
+
                 print("Iteration step: " + str(kiter))
                 print("residual norm: " + str(residual_norm))
                 if(kiter == max_iteration_steps):
@@ -415,11 +416,13 @@ class System():
         for n in range(number_of_increments):
 
             K_s, F_s = self.modified_stiffness_force()
-            deltaubar = np.linalg.solve(K_s, self.load_increment_vector)
-            Deltalam = np.sign(float(Deltau_prev.T @ deltaubar)) * \
-                arc_length / np.linalg.norm(deltaubar)
 
-            Deltau = np.linalg.solve(K_s, Deltalam * self.load_increment_vector)
+            velocity = np.linalg.solve(K_s, self.load_increment_vector)
+            Deltalam = float(np.sign(Deltau_prev.T @ velocity) *
+                             arc_length / np.sqrt(velocity.T @ velocity))
+
+            Deltau = np.linalg.solve(
+                K_s, Deltalam * self.load_increment_vector)
 
             u_pre = self.state_variable + Deltau
             lam_pre = self.control_parameter + Deltalam
@@ -436,7 +439,7 @@ class System():
             K_s, F_s = self.modified_stiffness_force()
             residual = F_s - self.control_parameter * self.load_increment_vector
             residual_norm = np.linalg.norm(residual)
-            
+
             u_temp = u_pre
             lam_temp = lam_pre
 
@@ -460,26 +463,34 @@ class System():
 
             deltau = np.zeros((self.number_of_dofs, 1), dtype=float)
             deltalam = 0.
-                        
+
             # iterate, until good result or so many iteration steps
             while(residual_norm > tolerance and kiter < max_iteration_steps):
                 K_s, F_s = self.modified_stiffness_force()
+
+                deltaustar = -np.linalg.solve(K_s, residual)
                 velocity = np.linalg.solve(K_s, self.load_increment_vector)
-                
-                scaling_factor = np.sqrt(1 + velocity.T @ velocity)
-                
-                constraint = 1/scaling_factor * np.abs(velocity.T @ (Deltau + deltau) + (Deltalam + deltalam)) - arc_length
-                                
-                augmented_stiffness = np.r_[np.c_[K_s, -self.load_increment_vector],
-                                            np.c_[velocity.T/scaling_factor, 1/scaling_factor]]
-                
-                augmented_force = -np.r_[residual, constraint]
-                
-                augmented_displacement = np.linalg.solve(augmented_stiffness, augmented_force)
-                
-                deltau = augmented_displacement[0: -1]
-                deltalam = float(augmented_displacement[-1])
-                
+                Deltau += deltau
+                a = float(velocity.T @ velocity)
+                b = float(2 * (Deltau + deltaustar).T @ velocity)
+                c = float((Deltau + deltaustar).T @
+                          (Deltau + deltaustar) - arc_length ** 2)
+
+                deltalam1 = (-b + np.sqrt(b**2 - 4*a*c)) / (2*a)
+                deltalam2 = (-b - np.sqrt(b**2 - 4*a*c)) / (2*a)
+
+                dotprod1 = float(
+                    (Deltau + deltaustar + deltalam1 * velocity).T @ Deltau)
+                dotprod2 = float(
+                    (Deltau + deltaustar + deltalam2 * velocity).T @ Deltau)
+
+                if dotprod1 >= dotprod2:
+                    deltalam = deltalam1
+                else:
+                    deltalam = deltalam2
+
+                deltau = deltaustar + deltalam * velocity
+
                 u_temp += deltau
                 lam_temp += deltalam
 
@@ -501,7 +512,7 @@ class System():
                 K_s, F_s = self.modified_stiffness_force()
                 residual = F_s - self.control_parameter * self.load_increment_vector
                 residual_norm = np.linalg.norm(residual)
-            
+
                 # update iterations counter
                 kiter += 1
                 print("Iteration step: " + str(kiter))
@@ -523,6 +534,132 @@ class System():
                 float(self.state_variable[self.interesting_dof]))
             self.control_parameter_plot.append(self.control_parameter)
             print("Incrementation step: " + str(n + 1))
+
+    # def arc_length_control(self, number_of_increments, tolerance, max_iteration_steps, direction, arc_length):
+    #     if direction == "positive":
+    #         Deltau_prev = np.ones((self.number_of_dofs, 1), dtype=float)
+    #     elif direction == "negative":
+    #         Deltau_prev = -np.ones((self.number_of_dofs, 1), dtype=float)
+    #     else:
+    #         raise ValueError("Please input the right direction!")
+
+    #     for n in range(number_of_increments):
+
+    #         K_s, F_s = self.modified_stiffness_force()
+
+    #         velocity = np.linalg.solve(K_s, self.load_increment_vector)
+    #         scaling_factor = float(np.sqrt(1 + velocity.T @ velocity))
+    #         Deltalam = np.sign(float(Deltau_prev.T @ velocity)) * \
+    #             arc_length / scaling_factor
+
+    #         Deltau = np.linalg.solve(
+    #             K_s, Deltalam * self.load_increment_vector)
+
+    #         u_pre = self.state_variable + Deltau
+    #         lam_pre = self.control_parameter + Deltalam
+
+    #         # update member data
+    #         if self.dimension == 2:
+    #             self.update_member_data_2d(u_pre, lam_pre)
+    #         else:
+    #             self.update_member_data_3d(u_pre, lam_pre, Deltau)
+
+    #         # initialize iteration counter
+    #         kiter = 0
+
+    #         K_s, F_s = self.modified_stiffness_force()
+    #         residual = F_s - self.control_parameter * self.load_increment_vector
+    #         residual_norm = np.linalg.norm(residual)
+
+    #         u_temp = u_pre
+    #         lam_temp = lam_pre
+
+    #         if self.analysis != "elastic":
+    #             if self.dimension == 2:
+    #                 plastic_strain = []
+    #                 internal_hardening_variable = []
+    #                 back_stress = []
+    #                 for ele in self.structure:
+    #                     plastic_strain.append(ele.plastic_strain)
+    #                     internal_hardening_variable.append(
+    #                         ele.internal_hardening_variable)
+    #                     back_stress.append(ele.back_stress)
+    #             else:
+    #                 plastic_strain = []
+    #                 internal_hardening_variable = []
+    #                 for ele in self.structure:
+    #                     plastic_strain.append(ele.plastic_strain)
+    #                     internal_hardening_variable.append(
+    #                         ele.internal_hardening_variable)
+
+    #         deltau = np.zeros((self.number_of_dofs, 1), dtype=float)
+    #         deltalam = 0.
+
+    #         # iterate, until good result or so many iteration steps
+    #         while(residual_norm > tolerance and kiter < max_iteration_steps):
+    #             K_s, F_s = self.modified_stiffness_force()
+    #             velocity = np.linalg.solve(K_s, self.load_increment_vector)
+
+    #             scaling_factor = float(np.sqrt(1 + velocity.T @ velocity))
+
+    #             constraint = 1/scaling_factor * \
+    #                 np.abs(velocity.T @ (Deltau + deltau) +
+    #                        (Deltalam + deltalam)) - arc_length
+
+    #             augmented_stiffness = np.r_[np.c_[K_s, -self.load_increment_vector],
+    #                                         np.c_[velocity.T/scaling_factor, 1/scaling_factor]]
+
+    #             augmented_force = -np.r_[residual, constraint]
+
+    #             augmented_displacement = np.linalg.solve(
+    #                 augmented_stiffness, augmented_force)
+
+    #             deltau = augmented_displacement[0: -1]
+    #             deltalam = float(augmented_displacement[-1])
+
+    #             u_temp += deltau
+    #             lam_temp += deltalam
+
+    #             # update member data
+    #             if self.analysis != "elastic":
+    #                 if self.dimension == 2:
+    #                     self.update_member_data_2d_iteration(
+    #                         u_temp, lam_temp, plastic_strain, internal_hardening_variable, back_stress)
+    #                 else:
+    #                     self.update_member_data_3d_iteration(
+    #                         u_temp, lam_temp, deltau, plastic_strain, internal_hardening_variable)
+    #             else:
+    #                 if self.dimension == 2:
+    #                     self.update_member_data_2d(
+    #                         u_temp, lam_temp)
+    #                 else:
+    #                     self.update_member_data_3d(u_temp, lam_temp, deltau)
+
+    #             K_s, F_s = self.modified_stiffness_force()
+    #             residual = F_s - self.control_parameter * self.load_increment_vector
+    #             residual_norm = np.linalg.norm(residual)
+
+    #             # update iterations counter
+    #             kiter += 1
+    #             print("Iteration step: " + str(kiter))
+    #             print("residual norm: " + str(residual_norm))
+    #             if(kiter == max_iteration_steps):
+    #                 self.plot_equilibrium_path()
+    #                 self.plot_the_structure()
+    #                 raise RuntimeError(
+    #                     'Newton-Raphson iterations did not converge!')
+
+    #         """
+    #         ------------------------------------------------------------------
+    #         3. Update variables to their final value for the current increment
+    #         ------------------------------------------------------------------
+    #         """
+    #         Deltau_prev = Deltau + deltau
+
+    #         self.state_variable_plot.append(
+    #             float(self.state_variable[self.interesting_dof]))
+    #         self.control_parameter_plot.append(self.control_parameter)
+    #         print("Incrementation step: " + str(n + 1))
 
     def solve_the_system(self, solver, number_of_increments, tolerance=1e-3, max_iteration_steps=100, load=None, displacement=None, direction=None, arc_length=None):
         if solver == "load-control":

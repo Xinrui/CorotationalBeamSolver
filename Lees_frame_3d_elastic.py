@@ -5,6 +5,7 @@
 """
 from source.System import System
 import time
+import numpy as np
 
 dim = 3
 geometry = "lees_frame"
@@ -16,11 +17,12 @@ E = 720  # Young's modulus
 nu = 0.3 # Poisson ratio
 
 sys.initialize_structure(beamtype="Timoshenko",
-                         youngs_modulus=E, poisson_ratio=nu, width=b, height=h)
+                         youngs_modulus=E, poisson_ratio=nu, width=b, height=h, e_3o=np.array([[0.,0.,1.]]).T)
 
 sys.add_dirichlet_bc(0, "xyz")
 sys.add_dirichlet_bc(20, "xyz")
-sys.add_load_bc(12, "y")
+sys.add_load(12, force=np.array([[0., 1., 0.]]).T)
+sys.define_interesting_dof(12, "y")
 
 time_start = time.time()
 sys.solve_the_system(solver="arc-length-control", number_of_increments=600,
