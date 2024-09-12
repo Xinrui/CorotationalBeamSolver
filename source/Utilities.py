@@ -100,9 +100,9 @@ def get_skew_symmetric(rotational_vector):
         the skew symmetric matrix of the rotational vector.
 
     """
-    skew_symmetric = np.array([[0.0, -rotational_vector[2], rotational_vector[1]],
-                               [rotational_vector[2], 0.0, -rotational_vector[0]],
-                               [-rotational_vector[1], rotational_vector[0], 0.0]], dtype=float)
+    skew_symmetric = np.array([[0.0, -rotational_vector[2,0], rotational_vector[1,0]],
+                               [rotational_vector[2,0], 0.0, -rotational_vector[0,0]],
+                               [-rotational_vector[1,0], rotational_vector[0,0], 0.0]], dtype=float)
     return skew_symmetric
 
 
