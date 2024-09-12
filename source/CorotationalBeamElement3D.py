@@ -797,9 +797,9 @@ class CorotationalBeamElement3D():
         q_1, q_2, q = self.auxiliary_vector()
         R_g = self.current_local_frame()
 
-        q1, q2 = (R_g.T @ q)[0: 2]
-        q11, q12 = (R_g.T @ q_1)[0: 2]
-        q21, q22 = (R_g.T @ q_2)[0: 2]
+        q1, q2 = (R_g.T @ q)[0: 2, 0]
+        q11, q12 = (R_g.T @ q_1)[0: 2, 0]
+        q21, q22 = (R_g.T @ q_2)[0: 2, 0]
 
         eta = q1 / q2
         eta_11 = q11 / q2
